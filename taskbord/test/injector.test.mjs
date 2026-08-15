@@ -130,6 +130,21 @@ test("passive automation policy keeps the user switch enabled across idle pauses
   assert.match(source, /record\.quota \? \{ quota: record\.quota \} : \{\}/);
 });
 
+test("the Windows injector registers automation only on a native Codex renderer", () => {
+  assert.match(
+    windowsInjectorSource,
+    /expression: "typeof window\.electronBridge\?\.sendMessageFromView === 'function'"/,
+  );
+  assert.match(
+    windowsInjectorSource,
+    /if \(nativeAutomationAvailable\?\.result\?\.value === true\) \{\s*registerTaskboardAutomationSender\(send\);\s*automationSenderRegistered = true;/,
+  );
+  assert.match(
+    windowsInjectorSource,
+    /restoreAutomations: \(\) => automationSenderRegistered\s*\? restoreTaskboardAutomationPolicies\(send\)\s*: Promise\.resolve\(\{ skipped: true \}\)/,
+  );
+});
+
 test("the Windows injector restores every enabled Taskboard policy", () => {
   assert.match(
     windowsInjectorSource,

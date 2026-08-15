@@ -2,7 +2,8 @@ import path from "node:path";
 import { isSupportedModelEffort } from "./taskboard-automation-options.mjs";
 
 const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy"]);
-const BOARD_PAUSE_STATUSES = new Set(["in_progress", "in_review", "blocked"]);
+const BOARD_PAUSE_STATUSES = new Set(["in_review", "blocked"]);
+const BOARD_RUN_STATUSES = new Set(["todo", "in_progress"]);
 const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
 const HOST_REQUEST_FIELDS = new Set([
   "id",
@@ -62,7 +63,7 @@ export function buildTaskboardAutomationName(request) {
 export function taskboardAutomationBoardState(tasks) {
   if (!Array.isArray(tasks)) return "unknown";
   if (tasks.some((task) => BOARD_PAUSE_STATUSES.has(task?.status))) return "pause";
-  return tasks.some((task) => task?.status === "todo") ? "ready" : "pause";
+  return tasks.some((task) => BOARD_RUN_STATUSES.has(task?.status)) ? "ready" : "pause";
 }
 
 export function buildTaskboardAutomationPrompt(request) {

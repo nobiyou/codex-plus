@@ -184,6 +184,7 @@ test("the stable name and generated prompt are project-scoped and encode the cla
   assert.match(prompt, /每个项目同一时间只允许一个自动认领任务/);
   assert.match(prompt, /不要仅因状态是 in_progress 就直接暂停/);
   assert.match(prompt, /最新评论是新的用户评论（晚于最近一条 Agent 评论）/);
+  assert.match(prompt, /优先使用任务 threadId，其次使用最新评论的 threadId，向该原对话发送继续处理指令/);
   assert.match(prompt, /用当前最新 version 添加一条简短评论/);
   assert.match(prompt, /记录已转交的评论 ID/);
   assert.match(prompt, /已有转交标记的评论/);
@@ -338,17 +339,40 @@ test("ensure-active is idempotent when the listed automation already matches", a
   assert.deepEqual(response, { item: existing });
 });
 
-test("the board gate pauses when one project already has unfinished work", () => {
+test("the board gate runs resumable work and pauses review or blocked work", () => {
   assert.equal(taskboardAutomationBoardState([]), "pause");
   assert.equal(taskboardAutomationBoardState([{ status: "backlog" }]), "pause");
   assert.equal(taskboardAutomationBoardState([{ status: "todo" }]), "ready");
+  assert.equal(taskboardAutomationBoardState([{ status: "in_progress" }]), "ready");
   assert.equal(taskboardAutomationBoardState([
     { status: "todo" },
     { status: "in_progress" },
-  ]), "pause");
+  ]), "ready");
   assert.equal(taskboardAutomationBoardState([{ status: "in_review" }]), "pause");
   assert.equal(taskboardAutomationBoardState([{ status: "blocked" }]), "pause");
+  assert.equal(taskboardAutomationBoardState([
+    { status: "todo" },
+    { status: "in_review" },
+  ]), "pause");
   assert.equal(taskboardAutomationBoardState(null), "unknown");
+});
+
+test("in-progress work reaches policy evaluation when quota tracking is disabled", () => {
+  const boardState = taskboardAutomationBoardState([{ status: "in_progress" }]);
+  const operation = boardState === "pause"
+    ? "pause"
+    : taskboardAutomationPolicyOperation(
+      { ...baseRequest, quotaAware: false },
+      {
+        explicit: true,
+        previousQuotaState: undefined,
+        quotaState: undefined,
+        currentStatus: "PAUSED",
+      },
+    );
+
+  assert.equal(boardState, "ready");
+  assert.equal(operation, "ensure-active");
 });
 
 test("ensure-active pauses active duplicate automations and keeps one canonical rule", async () => {

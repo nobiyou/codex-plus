@@ -1070,8 +1070,14 @@ function createTaskboardHostBridge(send) {
         name: taskboardHostBinding,
         executionContextId: contextId,
       });
-      registerTaskboardAutomationSender(send);
-      automationSenderRegistered = true;
+      const nativeAutomationAvailable = await send("Runtime.evaluate", {
+        expression: "typeof window.electronBridge?.sendMessageFromView === 'function'",
+        returnByValue: true,
+      });
+      if (nativeAutomationAvailable?.result?.value === true) {
+        registerTaskboardAutomationSender(send);
+        automationSenderRegistered = true;
+      }
       await send("Runtime.evaluate", {
         contextId,
         expression: `(() => {
@@ -1229,7 +1235,9 @@ function createTaskboardHostBridge(send) {
     publishHeartbeat,
     startHeartbeat,
     handleBinding,
-    restoreAutomations: () => restoreTaskboardAutomationPolicies(send),
+    restoreAutomations: () => automationSenderRegistered
+      ? restoreTaskboardAutomationPolicies(send)
+      : Promise.resolve({ skipped: true }),
     dispose,
   };
 }
