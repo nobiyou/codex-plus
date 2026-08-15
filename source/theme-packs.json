@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "description": "Primary accent pack map (preferred). When wallpaperMode/logoMode is default, switching accent swaps these assets. Paths are relative to windows/source/assets/ (or absolute). Custom uploads are never overwritten. Optional user overlay: %LOCALAPPDATA%\\Codex-Plus-Pro\\theme-packs.json (only overrides fields you set). Built-in map fills missing fields only.",
+  "accents": {
+    "pokedex": {
+      "wallpaper": "pokemon-onsen.jpg",
+      "logo": "pokeball-logo-white.png"
+    },
+    "lagoon": {
+      "wallpaper": "alternate-trainer-camp.jpg",
+      "logo": "pokeball-logo-user.png"
+    },
+    "forest": {
+      "wallpaper": "pokemon-onsen.jpg",
+      "logo": "pokeball-logo-user.png"
+    },
+    "graphite": {
+      "wallpaper": "alternate-trainer-camp.jpg",
+      "logo": "pokeball-logo-white.png"
+    },
+    "aria": {
+      "wallpaper": "blue-wall.jpg",
+      "logo": "blue-logo.png"
+    }
+  }
+}

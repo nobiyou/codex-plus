@@ -1,0 +1,26 @@
+# Local runtime output
+*.log
+*.log.*
+taskboard-runtime*.json
+
+# The embedded Taskboard source is part of this repository, but its local Git
+# metadata and generated/runtime state belong to the nested checkout.
+taskbord/.git/
+taskbord/.data/
+taskbord/node_modules/
+taskbord/dist/
+taskbord/.wrangler/
+taskbord/.tmp/
+taskbord/.playwright-cli/
+taskbord/cloud-migration-exports/
+taskbord/src-tauri/binaries/
+taskbord/src-tauri/gen/
+taskbord/src-tauri/resources/
+taskbord/src-tauri/target/
+
+# Windows/local generated output
+*.user
+*.userosscache
+*.suo
+Thumbs.db
+.DS_Store
