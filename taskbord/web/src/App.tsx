@@ -190,6 +190,12 @@ interface AutomationQuotaStatus {
   reason?: "api-key";
 }
 
+interface AutomationIssue {
+  kind: "run-failed";
+  runAt: number;
+  message: string;
+}
+
 interface ProjectAutomationRecord {
   automationId?: string;
   codexProjectId: string;
@@ -197,6 +203,7 @@ interface ProjectAutomationRecord {
   enabledByUser: boolean;
   quotaAware: boolean;
   quota?: AutomationQuotaStatus;
+  automationIssue?: AutomationIssue | null;
   intervalMinutes: AutomationIntervalMinutes;
   model: AutomationModel;
   reasoningEffort: AutomationReasoningEffort;
@@ -229,6 +236,7 @@ interface AutomationHostItem {
   model: AutomationModel;
   reasoningEffort: AutomationReasoningEffort;
   rrule: string;
+  lastRunAt?: number | null;
 }
 
 interface AutomationHostResponse {
@@ -237,6 +245,7 @@ interface AutomationHostResponse {
   item?: AutomationHostItem;
   items?: AutomationHostItem[];
   quota?: AutomationQuotaStatus;
+  automationIssue?: AutomationIssue | null;
   policy?: {
     automationId?: string;
     enabledByUser: boolean;
@@ -372,6 +381,9 @@ function readProjectAutomations(): ProjectAutomations {
         || typeof quotaAware !== "boolean"
       ) continue;
       const quota = isAutomationQuotaStatus(candidate.quota) ? candidate.quota : undefined;
+      const automationIssue = isAutomationIssue(candidate.automationIssue)
+        ? candidate.automationIssue
+        : undefined;
       result[projectId] = {
         automationId: candidate.automationId,
         codexProjectId: candidate.codexProjectId,
@@ -379,6 +391,7 @@ function readProjectAutomations(): ProjectAutomations {
         enabledByUser,
         quotaAware,
         ...(quota ? { quota } : {}),
+        ...(automationIssue ? { automationIssue } : {}),
         intervalMinutes: candidate.intervalMinutes ?? 5,
         model,
         reasoningEffort,
@@ -388,6 +401,15 @@ function readProjectAutomations(): ProjectAutomations {
   } catch {
     return {};
   }
+}
+
+function isAutomationIssue(value: unknown): value is AutomationIssue {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<AutomationIssue>;
+  return candidate.kind === "run-failed"
+    && Number.isFinite(candidate.runAt)
+    && typeof candidate.message === "string"
+    && candidate.message.length > 0;
 }
 
 function isAutomationQuotaStatus(value: unknown): value is AutomationQuotaStatus {
@@ -451,6 +473,7 @@ function isAutomationHostItem(value: unknown): value is AutomationHostItem {
     && isSupportedModelEffort(item.model, item.reasoningEffort)
     && typeof item.rrule === "string"
     && intervalMinutesFromRrule(item.rrule) !== null
+    && (item.lastRunAt === undefined || item.lastRunAt === null || Number.isFinite(item.lastRunAt))
   );
 }
 
@@ -925,6 +948,7 @@ export function App() {
         && current[projectId]?.enabledByUser === record.enabledByUser
         && current[projectId]?.quotaAware === record.quotaAware
         && JSON.stringify(current[projectId]?.quota) === JSON.stringify(record.quota)
+        && JSON.stringify(current[projectId]?.automationIssue) === JSON.stringify(record.automationIssue)
         && current[projectId]?.intervalMinutes === record.intervalMinutes
         && current[projectId]?.model === record.model
         && current[projectId]?.reasoningEffort === record.reasoningEffort
@@ -1007,6 +1031,7 @@ export function App() {
           enabledByUser: queuedSave.options.enabledByUser,
           quotaAware: queuedSave.options.quotaAware,
           ...(response.quota ? { quota: response.quota } : {}),
+          ...(response.automationIssue ? { automationIssue: response.automationIssue } : {}),
           intervalMinutes: queuedSave.options.intervalMinutes,
           model: queuedSave.options.model,
           reasoningEffort: queuedSave.options.reasoningEffort,
@@ -1050,6 +1075,11 @@ export function App() {
         ? response.items.filter(isAutomationHostItem)
         : [];
       const policy = isAutomationHostPolicy(response.policy) ? response.policy : null;
+      const responseIssue = response.automationIssue === null
+        ? undefined
+        : isAutomationIssue(response.automationIssue)
+          ? response.automationIssue
+          : stored?.automationIssue;
       if (!stored) {
         if (!policy) return;
         const item = (isAutomationHostItem(response.item) ? response.item : undefined)
@@ -1062,6 +1092,7 @@ export function App() {
           enabledByUser: policy.enabledByUser,
           quotaAware: policy.quotaAware,
           ...(response.quota ? { quota: response.quota } : {}),
+          ...(responseIssue ? { automationIssue: responseIssue } : {}),
           intervalMinutes: policy.intervalMinutes,
           model: policy.model,
           reasoningEffort: policy.reasoningEffort,
@@ -1080,6 +1111,12 @@ export function App() {
             enabledByUser: policy?.enabledByUser ?? stored.enabledByUser,
             quotaAware: policy?.quotaAware ?? stored.quotaAware,
             ...(response.quota ? { quota: response.quota } : {}),
+            ...(response.automationIssue === null
+              ? { automationIssue: undefined }
+              : responseIssue
+                ? { automationIssue: responseIssue }
+                : {}
+            ),
           });
         }
         return;
@@ -1099,9 +1136,17 @@ export function App() {
               ? { quota: stored.quota }
               : {}
         ),
+        ...(response.automationIssue === null
+          ? {}
+          : responseIssue
+            ? { automationIssue: responseIssue }
+            : stored.automationIssue
+              ? { automationIssue: stored.automationIssue }
+              : {}
+        ),
         intervalMinutes,
-        model: item.model,
-        reasoningEffort: item.reasoningEffort,
+        model: policy?.model ?? stored.model ?? item.model,
+        reasoningEffort: policy?.reasoningEffort ?? stored.reasoningEffort ?? item.reasoningEffort,
       });
     } catch (error) {
       setAutomationError(error instanceof Error

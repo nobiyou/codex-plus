@@ -24,6 +24,11 @@ interface AutomationOptions {
 
 interface AutomationState extends AutomationOptions {
   status: AutomationStatus;
+  automationIssue?: {
+    kind: "run-failed";
+    runAt: number;
+    message: string;
+  } | null;
   quota?: {
     state: AutomationQuotaState;
     checkedAt: number;
@@ -75,8 +80,11 @@ export function ProjectAutomationMenu({
   const [draft, setDraft] = useState<AutomationOptions>(DEFAULT_OPTIONS);
   const status = automation?.status ?? "PAUSED";
   const quota = automation?.quota;
+  const automationIssue = automation?.automationIssue;
   const stateLabel = !automation?.enabledByUser
     ? text("已暂停", "Paused")
+    : automationIssue
+      ? text("故障暂停", "Paused after failure")
     : automation.quotaAware && quota?.state === "blocked"
       ? text("额度暂停", "Paused by quota")
       : automation.quotaAware && quota?.state === "unavailable"
@@ -216,6 +224,13 @@ export function ProjectAutomationMenu({
           )}
         </div>
       )}
+      {automationIssue && (
+        <div className="project-automation-error" role="status">
+          <strong>{text("上一轮自动运行失败，已暂停", "The last automatic run failed and was paused.")}</strong>
+          <span>{automationIssue.message}</span>
+          <small>{text("重新打开自动认领开关可重试。", "Turn auto-claim off and on to retry.")}</small>
+        </div>
+      )}
       <label className="project-automation-field">
         <span>{text("间隔", "Interval")}</span>
         <select
@@ -243,6 +258,14 @@ export function ProjectAutomationMenu({
           ))}
         </select>
       </label>
+      {draft.model === "gpt-5.6-sol" && (
+        <p className="project-automation-note">
+          {text(
+            "Codex 运行对话可能显示“GPT 5.6 Sol Work Mode”，这是 5.6 Sol 的内部路由名，不会改写这里保存的模型。",
+            "Codex run threads may show “GPT 5.6 Sol Work Mode”. It is an internal route for 5.6 Sol and does not replace the saved model.",
+          )}
+        </p>
+      )}
       <label className="project-automation-field">
         <span>{text("推理强度", "Reasoning effort")}</span>
         <select

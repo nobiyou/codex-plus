@@ -130,6 +130,18 @@ test("passive automation policy keeps the user switch enabled across idle pauses
   assert.match(source, /record\.quota \? \{ quota: record\.quota \} : \{\}/);
 });
 
+test("the Windows automation host consumes one native run per taskboard activity generation", () => {
+  assert.match(windowsInjectorSource, /taskboardAutomationActivityKey/);
+  assert.match(windowsInjectorSource, /taskboardAutomationGateDecision/);
+  assert.match(windowsInjectorSource, /automationExists: Boolean\(currentItem\)/);
+  assert.match(windowsInjectorSource, /if \(gateDecision\.runObserved\)/);
+  assert.match(windowsInjectorSource, /readLatestAutomationRunFailure/);
+  assert.match(windowsInjectorSource, /automationGate: current\.automationGate/);
+  assert.match(windowsInjectorSource, /current\.automationGate = result\.automationGate/);
+  assert.match(windowsInjectorSource, /current\.automationIssue = result\.automationIssue/);
+  assert.match(windowsInjectorSource, /Taskboard automation run diagnosis failed/);
+});
+
 test("the Windows injector registers automation only on a native Codex renderer", () => {
   assert.match(
     windowsInjectorSource,

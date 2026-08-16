@@ -5,11 +5,16 @@ import { spawn } from "node:child_process";
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
+  buildTaskboardAutomationName,
+  taskboardAutomationActivityKey,
+  normalizeAutomationGate,
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
   taskboardAutomationBoardState,
+  taskboardAutomationGateDecision,
   taskboardAutomationPolicyOperation,
 } from "../taskbord/shared/taskboard-automation.mjs";
+import { readLatestAutomationRunFailure } from "../taskbord/shared/codex-automation-runs.mjs";
 import { readCodexQuotaStatus } from "../taskbord/scripts/codex-rate-limits.mjs";
 
 // =============================================================================
@@ -111,6 +116,10 @@ const taskboardRuntimePath = path.resolve(scriptDirectory, "..", "taskboard-runt
 const taskboardAutomationPoliciesPath = path.join(
   taskboardStateDirectory,
   "codex-automation-policies.json",
+);
+const codexHomePath = path.resolve(
+  process.env.CODEX_HOME
+    ?? path.join(process.env.USERPROFILE ?? process.cwd(), ".codex"),
 );
 let taskboardRuntimeSource = buildTaskboardRuntimeSource({
   enabled: taskboardEnabled,
@@ -1382,50 +1391,25 @@ async function applyTaskboardAutomationPolicy(
   request,
   rpc,
   stillCurrent = () => true,
-  { explicit = false, previousQuotaState } = {},
+  {
+    explicit = false,
+    previousQuotaState,
+    automationGate,
+  } = {},
 ) {
   const quota = request.quotaAware
     ? await readCodexQuotaStatus(request.model)
     : null;
   if (!stillCurrent()) return { quota, stale: true };
 
-  const boardState = request.enabledByUser
+  const boardSnapshot = request.enabledByUser
     ? await readTaskboardAutomationBoardState(request)
-    : "pause";
-  if (!stillCurrent()) return { quota, boardState, stale: true };
-
-  if (boardState === "pause") {
-    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
-    if (result?.error === "not-found") {
-      return {
-        operation: "pause",
-        boardState,
-        autoPaused: !explicit,
-        ...(quota ? { quota } : {}),
-      };
-    }
-    return {
-      ...result,
-      operation: "pause",
-      boardState,
-      autoPaused: !explicit,
-      ...(quota ? { quota } : {}),
-    };
-  }
-
-  if (boardState === "unknown") {
-    const listed = await reconcileTaskboardAutomation({ ...request, operation: "list" }, rpc);
-    return {
-      ...listed,
-      operation: "list",
-      boardState,
-      ...(quota ? { quota } : {}),
-    };
-  }
+    : { state: "pause", activityKey: null };
+  if (!stillCurrent()) return { quota, boardState: boardSnapshot.state, stale: true };
 
   let listed = null;
   let currentItem;
-  if (!explicit && request.enabledByUser) {
+  if (request.enabledByUser) {
     listed = await reconcileTaskboardAutomation({ ...request, operation: "list" }, rpc);
     const items = Array.isArray(listed.items) ? listed.items : [];
     currentItem = (
@@ -1434,6 +1418,89 @@ async function applyTaskboardAutomationPolicy(
         : null
     ) ?? items[0];
   }
+
+  const gateDecision = taskboardAutomationGateDecision({
+    enabledByUser: request.enabledByUser,
+    explicit,
+    currentLastRunAt: Number(currentItem?.lastRunAt),
+    currentActivityKey: boardSnapshot.activityKey,
+    automationExists: Boolean(currentItem),
+    gate: automationGate,
+  });
+
+  if (!stillCurrent()) return { quota, boardState: boardSnapshot.state, stale: true };
+
+  if (gateDecision.runObserved) {
+    let automationIssue = null;
+    try {
+      automationIssue = await readLatestAutomationRunFailure({
+        codexHomePath,
+        automationName: currentItem?.name ?? buildTaskboardAutomationName(request),
+        lastRunAt: currentItem.lastRunAt,
+      });
+    } catch (error) {
+      if (!shuttingDown) log(`Taskboard automation run diagnosis failed: ${error.message}`);
+    }
+    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
+    return {
+      ...result,
+      operation: "pause",
+      boardState: boardSnapshot.state,
+      autoPaused: true,
+      automationGate: gateDecision.gate,
+      automationIssue,
+      ...(quota ? { quota } : {}),
+    };
+  }
+
+  if (boardSnapshot.state === "pause") {
+    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
+    if (result?.error === "not-found") {
+      return {
+        operation: "pause",
+        boardState: boardSnapshot.state,
+        autoPaused: !explicit,
+        automationGate: gateDecision.gate
+          ? { ...gateDecision.gate, armed: false }
+          : null,
+        automationIssue: null,
+        ...(quota ? { quota } : {}),
+      };
+    }
+    return {
+      ...result,
+      operation: "pause",
+      boardState: boardSnapshot.state,
+      autoPaused: !explicit,
+      automationGate: gateDecision.gate
+        ? { ...gateDecision.gate, armed: false }
+        : null,
+      automationIssue: null,
+      ...(quota ? { quota } : {}),
+    };
+  }
+
+  if (boardSnapshot.state === "unknown") {
+    return {
+      ...listed,
+      operation: "list",
+      boardState: boardSnapshot.state,
+      ...(quota ? { quota } : {}),
+    };
+  }
+
+  if (gateDecision.operation === "pause") {
+    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
+    return {
+      ...result,
+      operation: "pause",
+      boardState: boardSnapshot.state,
+      autoPaused: true,
+      automationGate: gateDecision.gate,
+      ...(quota ? { quota } : {}),
+    };
+  }
+
   const operation = taskboardAutomationPolicyOperation(request, {
     explicit,
     previousQuotaState,
@@ -1444,12 +1511,35 @@ async function applyTaskboardAutomationPolicy(
     ? { item: currentItem, items: listed.items }
     : await reconcileTaskboardAutomation({ ...request, operation }, rpc);
   if (result?.error === "not-found") {
-    return { operation, ...(quota ? { quota } : {}) };
+    return {
+      operation,
+      automationGate: gateDecision.gate,
+      ...(
+        gateDecision.reason === "activity-changed"
+        || gateDecision.reason === "automation-missing"
+        || explicit
+          ? { automationIssue: null }
+          : {}
+      ),
+      ...(quota ? { quota } : {}),
+    };
   }
-  return { ...result, operation, ...(quota ? { quota } : {}) };
+  return {
+    ...result,
+    operation,
+    automationGate: gateDecision.gate,
+    ...(
+      gateDecision.reason === "activity-changed"
+      || gateDecision.reason === "automation-missing"
+      || explicit
+        ? { automationIssue: null }
+        : {}
+    ),
+    ...(quota ? { quota } : {}),
+  };
 }
 
-function storedTaskboardAutomationPolicy(request) {
+function storedTaskboardAutomationPolicy(request, record = null) {
   return {
     taskboardProjectId: request.taskboardProjectId,
     codexProjectId: request.codexProjectId,
@@ -1462,12 +1552,19 @@ function storedTaskboardAutomationPolicy(request) {
     intervalMinutes: request.intervalMinutes,
     model: request.model,
     reasoningEffort: request.reasoningEffort,
+    ...(record?.automationGate ? { automationGate: record.automationGate } : {}),
+    ...(record?.automationIssue ? { automationIssue: record.automationIssue } : {}),
   };
 }
 
 function restoredTaskboardAutomationPolicy(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const { quota, ...stored } = value;
+  const {
+    quota,
+    automationGate,
+    automationIssue,
+    ...stored
+  } = value;
   const request = parseTaskboardAutomationHostRequest({
     ...stored,
     id: "restored-policy",
@@ -1475,7 +1572,27 @@ function restoredTaskboardAutomationPolicy(value) {
     requestId: "restored-policy",
     operation: "apply-policy",
   });
-  return request ? { request, ...(quota ? { quota } : {}) } : null;
+  const normalizedGate = normalizeAutomationGate(automationGate);
+  const normalizedIssue = normalizeAutomationIssue(automationIssue);
+  return request
+    ? {
+      request,
+      ...(quota ? { quota } : {}),
+      ...(normalizedGate ? { automationGate: normalizedGate } : {}),
+      ...(normalizedIssue ? { automationIssue: normalizedIssue } : {}),
+    }
+    : null;
+}
+
+function normalizeAutomationIssue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (value.kind !== "run-failed") return null;
+  if (!Number.isFinite(value.runAt) || typeof value.message !== "string") return null;
+  return {
+    kind: "run-failed",
+    runAt: value.runAt,
+    message: value.message.slice(0, 600),
+  };
 }
 
 async function ensureTaskboardAutomationPoliciesLoaded() {
@@ -1505,7 +1622,7 @@ function persistTaskboardAutomationPolicies() {
     [...taskboardAutomationPolicyRecords.entries()].map(([projectId, record]) => [
       projectId,
       {
-        ...storedTaskboardAutomationPolicy(record.request),
+        ...storedTaskboardAutomationPolicy(record.request, record),
         ...(record.quota ? { quota: record.quota } : {}),
       },
     ]),
@@ -1570,6 +1687,7 @@ function enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit = fals
         {
           explicit,
           previousQuotaState: current.quota?.state,
+          automationGate: current.automationGate,
         },
       );
       if (result.stale) return result;
@@ -1578,6 +1696,14 @@ function enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit = fals
       }
       if (current.request.quotaAware && result.quota) current.quota = result.quota;
       else delete current.quota;
+      if (Object.prototype.hasOwnProperty.call(result, "automationGate")) {
+        if (result.automationGate) current.automationGate = result.automationGate;
+        else delete current.automationGate;
+      }
+      if (Object.prototype.hasOwnProperty.call(result, "automationIssue")) {
+        if (result.automationIssue) current.automationIssue = result.automationIssue;
+        else delete current.automationIssue;
+      }
       await persistTaskboardAutomationPolicies();
       scheduleTaskboardAutomationPolicyCheck(current, result);
       return result;
@@ -1623,6 +1749,7 @@ async function reconcileStoredTaskboardAutomationPolicy(projectId, rpc) {
     ...result,
     policy: storedTaskboardAutomationPolicy(current.request),
     ...(current.quota ? { quota: current.quota } : {}),
+    ...(current.automationIssue ? { automationIssue: current.automationIssue } : {}),
   };
 }
 
@@ -1641,7 +1768,7 @@ async function enqueueCurrentTaskboardAutomationPolicy(projectId) {
 }
 
 async function readTaskboardAutomationBoardState(request) {
-  if (!taskboardEnabled || !taskboardUrl) return "unknown";
+  if (!taskboardEnabled || !taskboardUrl) return { state: "unknown", activityKey: null };
   try {
     const pageUrl = resolveTaskboardHostPageUrl();
     const apiUrl = new URL("api/tasks", pageUrl);
@@ -1653,10 +1780,13 @@ async function readTaskboardAutomationBoardState(request) {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
-    return taskboardAutomationBoardState(payload?.tasks);
+    return {
+      state: taskboardAutomationBoardState(payload?.tasks),
+      activityKey: taskboardAutomationActivityKey(payload?.tasks),
+    };
   } catch (error) {
     if (!shuttingDown) log(`Taskboard automation board check failed: ${error.message}`);
-    return "unknown";
+    return { state: "unknown", activityKey: null };
   }
 }
 

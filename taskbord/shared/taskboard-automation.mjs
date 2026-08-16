@@ -1,5 +1,8 @@
 import path from "node:path";
-import { isSupportedModelEffort } from "./taskboard-automation-options.mjs";
+import {
+  canonicalAutomationModel,
+  isSupportedModelEffort,
+} from "./taskboard-automation-options.mjs";
 
 const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy"]);
 const BOARD_PAUSE_STATUSES = new Set(["in_review", "blocked"]);
@@ -64,6 +67,109 @@ export function taskboardAutomationBoardState(tasks) {
   if (!Array.isArray(tasks)) return "unknown";
   if (tasks.some((task) => BOARD_PAUSE_STATUSES.has(task?.status))) return "pause";
   return tasks.some((task) => BOARD_RUN_STATUSES.has(task?.status)) ? "ready" : "pause";
+}
+
+export function taskboardAutomationActivityKey(tasks) {
+  if (!Array.isArray(tasks)) return null;
+  return JSON.stringify(tasks
+    .map((task) => [
+      typeof task?.id === "string" ? task.id : null,
+      typeof task?.status === "string" ? task.status : null,
+      Number.isInteger(task?.version) ? task.version : null,
+      typeof task?.activityKey === "string" ? task.activityKey : null,
+      typeof task?.activityUpdatedAt === "string"
+        ? task.activityUpdatedAt
+        : typeof task?.updatedAt === "string"
+          ? task.updatedAt
+          : null,
+    ])
+    .sort((left, right) => String(left[0] ?? "").localeCompare(String(right[0] ?? ""))));
+}
+
+export function taskboardAutomationGateDecision({
+  enabledByUser,
+  explicit,
+  currentLastRunAt,
+  currentActivityKey,
+  automationExists = true,
+  gate,
+}) {
+  if (!enabledByUser) return { operation: "pause", gate: null, reason: "disabled" };
+
+  const normalizedGate = normalizeAutomationGate(gate);
+  const normalizedLastRunAt = Number.isFinite(currentLastRunAt) ? currentLastRunAt : null;
+  if (explicit || !normalizedGate) {
+    return {
+      operation: "ensure-active",
+      gate: {
+        lastRunAt: normalizedLastRunAt,
+        activityKey: currentActivityKey,
+        armed: true,
+      },
+      reason: explicit ? "explicit" : "baseline",
+    };
+  }
+
+
+  if (!automationExists) {
+    return {
+      operation: "ensure-active",
+      gate: {
+        lastRunAt: normalizedLastRunAt ?? normalizedGate.lastRunAt,
+        activityKey: currentActivityKey,
+        armed: true,
+      },
+      reason: "automation-missing",
+    };
+  }
+
+  if (
+    normalizedLastRunAt !== null
+    && (normalizedGate.lastRunAt === null || normalizedLastRunAt > normalizedGate.lastRunAt)
+  ) {
+    return {
+      operation: "pause",
+      gate: {
+        lastRunAt: normalizedLastRunAt,
+        activityKey: currentActivityKey ?? normalizedGate.activityKey,
+        armed: false,
+      },
+      reason: "run-observed",
+      runObserved: true,
+    };
+  }
+
+  if (
+    normalizedGate.armed === false
+    && currentActivityKey !== null
+    && currentActivityKey !== normalizedGate.activityKey
+  ) {
+    return {
+      operation: "ensure-active",
+      gate: {
+        lastRunAt: normalizedLastRunAt ?? normalizedGate.lastRunAt,
+        activityKey: currentActivityKey,
+        armed: true,
+      },
+      reason: "activity-changed",
+    };
+  }
+
+  return normalizedGate.armed
+    ? { operation: "ensure-active", gate: normalizedGate, reason: "armed" }
+    : { operation: "pause", gate: normalizedGate, reason: "waiting-for-activity" };
+}
+
+export function normalizeAutomationGate(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const lastRunAt = value.lastRunAt === null || Number.isFinite(value.lastRunAt)
+    ? value.lastRunAt
+    : null;
+  const activityKey = value.activityKey === null || typeof value.activityKey === "string"
+    ? value.activityKey
+    : null;
+  if (typeof value.armed !== "boolean") return null;
+  return { lastRunAt, activityKey, armed: value.armed };
 }
 
 export function buildTaskboardAutomationPrompt(request) {
@@ -186,18 +292,24 @@ async function pauseDuplicateAutomations(items, canonical, spec, rpc) {
 }
 
 function sanitizeAutomation(item) {
+  const model = canonicalAutomationModel(item?.model);
   if (
     !validText(item?.id, 256)
     || (item.status !== "ACTIVE" && item.status !== "PAUSED")
-    || !isSupportedModelEffort(item.model, item.reasoningEffort)
+    || !isSupportedModelEffort(model, item.reasoningEffort)
     || !validRrule(item.rrule)
   ) return null;
   return {
     id: item.id,
     status: item.status,
-    model: item.model,
+    model,
     reasoningEffort: item.reasoningEffort,
     rrule: item.rrule,
+    ...(
+      item.lastRunAt === null || Number.isFinite(item.lastRunAt)
+        ? { lastRunAt: item.lastRunAt }
+        : {}
+    ),
     ...(
       item.nextRunAt === null || Number.isFinite(item.nextRunAt)
         ? { nextRunAt: item.nextRunAt }

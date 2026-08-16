@@ -68,6 +68,8 @@ test("the project navigation automation menu owns the icon, fields, and accessib
   assert.match(menuSource, /5, 10, 15, 30, 60/);
   assert.match(menuSource, /AUTOMATION_MODELS\.map/);
   assert.match(menuSource, /EFFORT_LABELS\[effort\]/);
+  assert.match(menuSource, /GPT 5\.6 Sol Work Mode/);
+  assert.match(menuSource, /上一轮自动运行失败，已暂停/);
   assert.match(menuSource, /createPortal/);
   assert.match(menuSource, /window\.addEventListener\("resize"/);
   assert.match(menuSource, /window\.addEventListener\("scroll", closeFromViewportChange, true\)/);
@@ -170,6 +172,8 @@ test("opening settings and changing projects reconcile with the host list", () =
   assert.match(appSource, /status: item\?\.status \?\? "PAUSED"/);
   assert.match(appSource, /enabledByUser: policy\.enabledByUser/);
   assert.match(appSource, /quotaAware: policy\.quotaAware/);
+  assert.match(appSource, /model: policy\?\.model \?\? stored\.model \?\? item\.model/);
+  assert.match(appSource, /reasoningEffort: policy\?\.reasoningEffort \?\? stored\.reasoningEffort \?\? item\.reasoningEffort/);
   assert.match(appSource, /automationId: undefined,[\s\S]*?status: "PAUSED"/);
   assert.match(drainSource, /writeProjectAutomation\(queuedSave\.projectId, previousRecord\)/);
 });

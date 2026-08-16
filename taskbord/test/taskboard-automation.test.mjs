@@ -7,11 +7,14 @@ import {
   buildTaskboardAutomationSpec,
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
+  taskboardAutomationActivityKey,
   taskboardAutomationBoardState,
+  taskboardAutomationGateDecision,
   taskboardAutomationPolicyOperation,
 } from "../shared/taskboard-automation.mjs";
 import {
   AUTOMATION_MODELS,
+  canonicalAutomationModel,
   isSupportedModelEffort,
   withAutomationModel,
 } from "../shared/taskboard-automation-options.mjs";
@@ -88,6 +91,8 @@ test("the automation model catalog matches Codex and normalizes unsupported effo
     model: "gpt-5.6-luna",
     reasoningEffort: "medium",
   });
+  assert.equal(canonicalAutomationModel("gpt-5.6-sol-wm"), "gpt-5.6-sol");
+  assert.equal(canonicalAutomationModel("gpt-5.6-sol"), "gpt-5.6-sol");
 });
 
 test("the automation host request accepts only whitelisted project automation options", () => {
@@ -357,6 +362,99 @@ test("the board gate runs resumable work and pauses review or blocked work", () 
   assert.equal(taskboardAutomationBoardState(null), "unknown");
 });
 
+test("automation activity keys are stable by task id and change with task activity", () => {
+  const first = {
+    id: "task-b",
+    status: "in_progress",
+    version: 2,
+    activityKey: "comments-v2",
+    activityUpdatedAt: "2026-08-15T14:00:00.000Z",
+  };
+  const second = {
+    id: "task-a",
+    status: "todo",
+    version: 1,
+    activityKey: "comments-v1",
+    activityUpdatedAt: "2026-08-15T13:00:00.000Z",
+  };
+  assert.equal(
+    taskboardAutomationActivityKey([first, second]),
+    taskboardAutomationActivityKey([second, first]),
+  );
+  assert.notEqual(
+    taskboardAutomationActivityKey([first, second]),
+    taskboardAutomationActivityKey([{ ...first, activityKey: "comments-v3" }, second]),
+  );
+  assert.equal(taskboardAutomationActivityKey(null), null);
+});
+
+test("automation gate allows one native run per taskboard activity generation", () => {
+  const baseline = taskboardAutomationGateDecision({
+    enabledByUser: true,
+    explicit: true,
+    currentLastRunAt: 100,
+    currentActivityKey: "activity-a",
+    gate: null,
+  });
+  assert.deepEqual(baseline, {
+    operation: "ensure-active",
+    gate: { lastRunAt: 100, activityKey: "activity-a", armed: true },
+    reason: "explicit",
+  });
+
+  const observed = taskboardAutomationGateDecision({
+    enabledByUser: true,
+    explicit: false,
+    currentLastRunAt: 200,
+    currentActivityKey: "activity-a",
+    gate: baseline.gate,
+  });
+  assert.deepEqual(observed, {
+    operation: "pause",
+    gate: { lastRunAt: 200, activityKey: "activity-a", armed: false },
+    reason: "run-observed",
+    runObserved: true,
+  });
+
+  assert.equal(taskboardAutomationGateDecision({
+    enabledByUser: true,
+    explicit: false,
+    currentLastRunAt: 200,
+    currentActivityKey: "activity-a",
+    gate: observed.gate,
+  }).reason, "waiting-for-activity");
+
+  const rearmed = taskboardAutomationGateDecision({
+    enabledByUser: true,
+    explicit: false,
+    currentLastRunAt: 200,
+    currentActivityKey: "activity-b",
+    gate: observed.gate,
+  });
+  assert.deepEqual(rearmed, {
+    operation: "ensure-active",
+    gate: { lastRunAt: 200, activityKey: "activity-b", armed: true },
+    reason: "activity-changed",
+  });
+
+  assert.equal(taskboardAutomationGateDecision({
+    enabledByUser: true,
+    explicit: false,
+    currentLastRunAt: null,
+    currentActivityKey: "activity-b",
+    automationExists: false,
+    gate: observed.gate,
+  }).reason, "automation-missing");
+
+  assert.deepEqual(taskboardAutomationGateDecision({
+    enabledByUser: false,
+    explicit: false,
+    currentLastRunAt: 200,
+    currentActivityKey: "activity-b",
+    gate: rearmed.gate,
+  }), { operation: "pause", gate: null, reason: "disabled" });
+});
+
 test("in-progress work reaches policy evaluation when quota tracking is disabled", () => {
   const boardState = taskboardAutomationBoardState([{ status: "in_progress" }]);
   const operation = boardState === "pause"
@@ -478,6 +576,7 @@ test("pause never creates and list returns only sanitized matching project autom
     id: "matching",
     status: "ACTIVE",
     ...buildTaskboardAutomationSpec(baseRequest),
+    lastRunAt: 1_786_803_961_570,
     untrustedListField: "must not be echoed into an update",
   };
   const unrelated = {
@@ -539,6 +638,7 @@ test("pause never creates and list returns only sanitized matching project autom
       model: "gpt-5.5",
       reasoningEffort: "high",
       rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
+      lastRunAt: 1_786_803_961_570,
     }],
   });
 
@@ -553,6 +653,25 @@ test("pause never creates and list returns only sanitized matching project autom
     async () => ({ items: [invalidPair] }),
   );
   assert.deepEqual(invalidListed, { items: [] });
+
+  const runtimeAlias = {
+    ...matching,
+    id: "runtime-alias",
+    model: "gpt-5.6-sol-wm",
+    reasoningEffort: "low",
+  };
+  const normalizedAlias = await reconcileTaskboardAutomation(
+    { ...baseRequest, operation: "list" },
+    async () => ({ items: [runtimeAlias] }),
+  );
+  assert.deepEqual(normalizedAlias.items[0], {
+    id: "runtime-alias",
+    status: "ACTIVE",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "low",
+    rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
+    lastRunAt: 1_786_803_961_570,
+  });
 });
 
 test("pause is idempotent for an already paused matching automation", async () => {
