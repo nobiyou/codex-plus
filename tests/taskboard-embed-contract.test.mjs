@@ -47,6 +47,9 @@ test("injector loads the taskboard payload as a separate renderer source", async
   assert.match(source, /if \(isTaskboardTargetUrl\(url\)\) return false/);
   assert.match(source, /if \(!url\.pathname\.endsWith\("\/"\)\) url\.pathname \+= "\/"/);
   assert.match(source, /function buildTaskboardRuntimeSource\(/);
+  assert.match(source, /const taskboardRuntimeFile = path\.resolve\(/);
+  assert.match(source, /path\.join\(taskboardStateDirectory, "launcher-runtime\.json"\)/);
+  assert.match(source, /process\.env\.CODEX_TASKBOARD_RUNTIME_FILE = taskboardRuntimeFile/);
   assert.match(source, /new Function\(/);
 });
 

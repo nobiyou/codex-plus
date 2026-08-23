@@ -112,6 +112,13 @@ const taskboardStateDirectory = path.resolve(
       "taskboard",
     ),
 );
+const taskboardRuntimeFile = path.resolve(
+  process.env.CODEX_TASKBOARD_RUNTIME_FILE
+    ?? path.join(taskboardStateDirectory, "launcher-runtime.json"),
+);
+if (!process.env.CODEX_TASKBOARD_RUNTIME_FILE) {
+  process.env.CODEX_TASKBOARD_RUNTIME_FILE = taskboardRuntimeFile;
+}
 const taskboardRuntimePath = path.resolve(scriptDirectory, "..", "taskboard-runtime.psm1");
 const taskboardAutomationPoliciesPath = path.join(
   taskboardStateDirectory,
