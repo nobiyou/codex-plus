@@ -10,6 +10,8 @@ import {
   normalizeCodexEvent,
   spawnCodexTurn,
 } from "./ai-chat-process.mjs";
+import { signalProcessTree } from "../shared/process-tree.mjs";
+import { TaskRunService } from "./task-run.mjs";
 
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const ERROR_CONTENT_LIMIT = 65_536;
@@ -25,16 +27,23 @@ function cappedError(value) {
   return message.slice(0, ERROR_CONTENT_LIMIT);
 }
 
-function signalProcessGroup(child, signal) {
-  if (Number.isInteger(child?.pid)) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
+function taskRunEventData(aiChatRunId, normalized) {
+  const data = {
+    aiChatRunId,
+    type: normalized.type,
+  };
+  for (const key of ["status", "itemId", "exitCode"]) {
+    if (normalized.data && Object.hasOwn(normalized.data, key)) data[key] = normalized.data[key];
   }
-  try {
-    child?.kill(signal);
-  } catch {}
+  return data;
+}
+
+function capTaskRunText(value, limit) {
+  return Buffer.from(String(value ?? ""), "utf8").subarray(0, limit).toString("utf8");
+}
+
+function taskRunEventContent(normalized) {
+  return capTaskRunText(normalized.content || normalized.type || "Codex provider event", 8_192);
 }
 
 function wait(milliseconds) {
@@ -52,6 +61,10 @@ export class AiChatService {
     this.manageTaskboardSkillPath = options.manageTaskboardSkillPath;
     this.processEnv = options.processEnv ?? process.env;
     this.killGraceMs = options.killGraceMs ?? 1_000;
+    this.taskRuns = options.taskRuns ?? null;
+    this.taskRunLeaseMs = options.taskRunLeaseMs ?? this.taskRuns?.leaseMs ?? 30_000;
+    this.taskRunHeartbeatMs = options.taskRunHeartbeatMs ?? Math.max(250, Math.floor(this.taskRunLeaseMs / 3));
+    this.taskRunOwner = options.taskRunOwner ?? `ai-chat:${process.pid}`;
     this.resolveContext = options.resolveContext ?? (async (projectId, issueId) => {
       const resolved = await resolveAiWorkspace(projectId, this.codexStatePath, this.database);
       let issue;
@@ -294,6 +307,30 @@ export class AiChatService {
       });
       this.#emit(threadId, { type: "ai.event", event: userEvent });
 
+      const taskRunOrigin = this.#taskRunOrigin(thread, resolved);
+      const taskRun = taskRunOrigin
+        ? this.taskRuns.create({
+            ...taskRunOrigin,
+            codexThreadId: thread.codexThreadId,
+          })
+        : null;
+      let taskRunAuthority = null;
+      let taskRunLost = false;
+      if (taskRun) {
+        const claimed = this.taskRuns.claim(taskRun.id, {
+          leaseOwner: `${this.taskRunOwner}:${run.id}`,
+        });
+        taskRunAuthority = claimed.authority;
+        this.taskRuns.start(taskRun.id, taskRunAuthority);
+        this.taskRuns.event(taskRun.id, {
+          ...taskRunAuthority,
+          source: "taskboard",
+          kind: "run.started",
+          content: "Codex task run started",
+          data: { aiChatRunId: run.id },
+        });
+      }
+
       const resumingThreadId = thread.codexThreadId;
       let startedThreadId = null;
       let terminalOutcome = null;
@@ -315,7 +352,39 @@ export class AiChatService {
             }
             startedThreadId = normalized.threadId;
             this.database.updateAiChatThread(threadId, { codexThreadId: normalized.threadId });
+            if (taskRun && !taskRunLost) {
+              try {
+                this.taskRuns.event(taskRun.id, {
+                  ...taskRunAuthority,
+                  source: "codex",
+                  kind: "provider.event",
+                  content: "thread.started",
+                  data: {
+                    aiChatRunId: run.id,
+                    type: "thread.started",
+                    codexThreadId: normalized.threadId,
+                  },
+                });
+              } catch (error) {
+                taskRunLost = true;
+                throw error;
+              }
+            }
             return;
+          }
+          if (taskRun && !taskRunLost) {
+            try {
+              this.taskRuns.event(taskRun.id, {
+                ...taskRunAuthority,
+                source: "codex",
+                kind: "provider.event",
+                content: taskRunEventContent(normalized),
+                data: taskRunEventData(run.id, normalized),
+              });
+            } catch (error) {
+              taskRunLost = true;
+              throw error;
+            }
           }
           const event = this.database.insertAiChatEvent({
             threadId,
@@ -335,8 +404,30 @@ export class AiChatService {
         },
       });
 
-      const active = { child, threadId, interrupted: false, temporaryDirectory };
+      const active = {
+        child,
+        threadId,
+        interrupted: false,
+        temporaryDirectory,
+        taskRun,
+        taskRunAuthority,
+        get taskRunLost() {
+          return taskRunLost;
+        },
+      };
       this.active.set(run.id, active);
+      if (taskRun) {
+        active.taskRunHeartbeat = setInterval(() => {
+          if (!this.active.has(run.id) || taskRunLost) return;
+          try {
+            this.taskRuns.heartbeat(taskRun.id, taskRunAuthority);
+          } catch {
+            taskRunLost = true;
+            signalProcessTree(child, "SIGTERM");
+          }
+        }, this.taskRunHeartbeatMs);
+        active.taskRunHeartbeat.unref();
+      }
       const finalization = completion.then(
         (result) => this.#finishRun({
           run,
@@ -384,9 +475,9 @@ export class AiChatService {
     }
 
     active.interrupted = true;
-    signalProcessGroup(active.child, "SIGTERM");
+    signalProcessTree(active.child, "SIGTERM");
     const timer = setTimeout(() => {
-      if (this.active.has(runId)) signalProcessGroup(active.child, "SIGKILL");
+      if (this.active.has(runId)) signalProcessTree(active.child, "SIGKILL");
     }, this.killGraceMs);
     timer.unref();
 
@@ -401,7 +492,7 @@ export class AiChatService {
     const entries = [...this.active.entries()];
     for (const [, active] of entries) {
       active.interrupted = true;
-      signalProcessGroup(active.child, "SIGTERM");
+      signalProcessTree(active.child, "SIGTERM");
     }
 
     const completions = entries
@@ -411,7 +502,7 @@ export class AiChatService {
       const settled = Promise.allSettled(completions);
       await Promise.race([settled, wait(this.killGraceMs)]);
       for (const [runId, active] of entries) {
-        if (this.active.has(runId)) signalProcessGroup(active.child, "SIGKILL");
+        if (this.active.has(runId)) signalProcessTree(active.child, "SIGKILL");
       }
       await settled;
     }
@@ -517,6 +608,22 @@ export class AiChatService {
       || [...this.active.values()].some((active) => active.threadId === thread.id);
   }
 
+  #taskRunOrigin(thread, resolved) {
+    if (!this.taskRuns || !thread.origin.issueId) return null;
+    const issue = this.database.getTask(thread.origin.issueId);
+    if (!issue || issue.archivedAt !== null) return null;
+    return {
+      taskId: issue.id,
+      projectId: thread.origin.projectId,
+      codexProjectKind: "local",
+      workspacePath: resolved.workspacePath,
+      branch: issue.developmentContext?.branch ?? null,
+      worktreePath: issue.developmentContext?.type === "worktree"
+        ? issue.developmentContext.path
+        : null,
+    };
+  }
+
   async #finishRun({
     run,
     active,
@@ -554,6 +661,47 @@ export class AiChatService {
     }
 
     try {
+      if (active.taskRun && active.taskRunAuthority && !active.taskRunLost) {
+        const failureClass = status === "interrupted"
+          ? "interrupted"
+          : status === "failed"
+            ? (error
+              || terminalOutcome() === "failed"
+              || (result?.exitCode === 0 && terminalOutcome() !== "completed")
+              || (result?.exitCode === null && terminalOutcome() !== "completed")
+                ? "provider_protocol"
+                : "provider_exit")
+            : null;
+        try {
+          this.taskRuns.event(active.taskRun.id, {
+            ...active.taskRunAuthority,
+            source: "runner",
+            kind: status === "completed" ? "run.completed" : "run.failed",
+            content: capTaskRunText(
+              status === "completed" ? "Codex task run completed" : (publicError || "Codex task run failed"),
+              8_192,
+            ),
+            data: {
+              aiChatRunId: run.id,
+              status,
+              ...(result?.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+            },
+          });
+          this.taskRuns.complete(active.taskRun.id, {
+            ...active.taskRunAuthority,
+            status,
+            failureClass,
+            exitCode: result?.exitCode ?? null,
+            error: publicError === null ? null : capTaskRunText(publicError, 8_192),
+            outputSummary: capTaskRunText(
+              status === "completed" ? "Codex task run completed" : publicError,
+              16_384,
+            ),
+          });
+        } catch (taskRunError) {
+          active.taskRunError = taskRunError;
+        }
+      }
       if (status === "failed" && terminalOutcome() !== "failed") {
         const errorEvent = this.database.insertAiChatEvent({
           threadId: run.threadId,
@@ -575,6 +723,7 @@ export class AiChatService {
       return updated;
     } finally {
       this.active.delete(run.id);
+      if (active.taskRunHeartbeat) clearInterval(active.taskRunHeartbeat);
       if (active.temporaryDirectory) {
         await rm(active.temporaryDirectory, { recursive: true, force: true });
       }

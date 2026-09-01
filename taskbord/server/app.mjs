@@ -35,6 +35,7 @@ import {
   CodexUsageService,
 } from "./codex-usage.mjs";
 import { ProjectSummaryService } from "./project-summary.mjs";
+import { TaskRunService } from "./task-run.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -1521,8 +1522,10 @@ export function createTaskboardServer(options = {}) {
     return { ...resolvedWorkspace, issue };
   }
 
+  const taskRuns = new TaskRunService({ database });
   const aiChat = new AiChatService({
     database,
+    taskRuns,
     codexExecutable: resolved.codexExecutable,
     codexStatePath: resolved.codexStatePath,
     manageTaskboardSkillPath: resolved.skillPath,

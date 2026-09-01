@@ -323,6 +323,159 @@ function aiChatEventFromRow(row) {
   };
 }
 
+const TASK_RUN_FAILURE_CLASSES = new Set([
+  "preflight",
+  "provider_exit",
+  "provider_protocol",
+  "timeout",
+  "interrupted",
+  "workspace",
+  "git",
+  "verification",
+  "unknown",
+]);
+const TASK_RUN_TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "interrupted",
+  "canceled",
+]);
+const TASK_RUN_TEXT_LIMITS = Object.freeze({
+  leaseOwner: 256,
+  timestamp: 64,
+  error: 8_192,
+  outputSummary: 16_384,
+  eventKind: 128,
+  eventSource: 32,
+  eventContent: 8_192,
+  jsonBytes: 32_768,
+});
+
+function taskRunJsonFromRow(value, field) {
+  if (value === null || value === undefined) return null;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Stored task run ${field} is not valid JSON: ${error.message}`);
+  }
+}
+
+function taskRunFromRow(row) {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    attempt: row.attempt,
+    status: row.status,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    heartbeatAt: row.heartbeat_at,
+    fencingToken: row.fencing_token,
+    codexThreadId: row.codex_thread_id,
+    projectId: row.project_id,
+    codexProjectKind: row.codex_project_kind,
+    codexHostId: row.codex_host_id,
+    workspacePath: row.workspace_path,
+    branch: row.branch,
+    worktreePath: row.worktree_path,
+    baseSha: row.base_sha,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    exitCode: row.exit_code,
+    failureClass: row.failure_class,
+    error: row.error,
+    outputSummary: row.output_summary,
+    verificationEvidence: taskRunJsonFromRow(row.verification_evidence, "verification_evidence"),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function taskRunEventFromRow(row) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    sequence: row.sequence,
+    kind: row.kind,
+    source: row.source,
+    content: row.content,
+    data: taskRunJsonFromRow(row.data, "event data"),
+    createdAt: row.created_at,
+  };
+}
+
+function boundedTaskRunText(value, field, limit, { required = false } = {}) {
+  if (value === null || value === undefined) {
+    if (required) {
+      throw new ApiError(400, "TASK_RUN_INVALID_FIELD", `${field} is required`);
+    }
+    return null;
+  }
+  const text = String(value);
+  if (required && text.trim().length === 0) {
+    throw new ApiError(400, "TASK_RUN_INVALID_FIELD", `${field} is required`);
+  }
+  if (Buffer.byteLength(text, "utf8") > limit) {
+    throw new ApiError(400, "TASK_RUN_FIELD_TOO_LARGE", `${field} exceeds ${limit} bytes`);
+  }
+  return text;
+}
+
+function boundedTaskRunJson(value, field) {
+  if (value === null || value === undefined) return null;
+  let parsed = value;
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch (error) {
+      throw new ApiError(400, "TASK_RUN_INVALID_JSON", `${field} must contain valid JSON`, {
+        cause: error.message,
+      });
+    }
+  }
+  let serialized;
+  try {
+    serialized = JSON.stringify(parsed);
+  } catch (error) {
+    throw new ApiError(400, "TASK_RUN_INVALID_JSON", `${field} must be JSON serializable`, {
+      cause: error.message,
+    });
+  }
+  if (serialized === undefined) {
+    throw new ApiError(400, "TASK_RUN_INVALID_JSON", `${field} must be JSON serializable`);
+  }
+  if (Buffer.byteLength(serialized, "utf8") > TASK_RUN_TEXT_LIMITS.jsonBytes) {
+    throw new ApiError(
+      400,
+      "TASK_RUN_FIELD_TOO_LARGE",
+      `${field} exceeds ${TASK_RUN_TEXT_LIMITS.jsonBytes} bytes`,
+    );
+  }
+  return serialized;
+}
+
+function taskRunFailureClass(value) {
+  if (value === null || value === undefined) return null;
+  if (!TASK_RUN_FAILURE_CLASSES.has(value)) {
+    throw new ApiError(400, "TASK_RUN_INVALID_FAILURE_CLASS", `Unsupported task run failure class '${value}'`);
+  }
+  return value;
+}
+
+function taskRunTerminalStatus(value) {
+  if (!TASK_RUN_TERMINAL_STATUSES.has(value)) {
+    throw new ApiError(400, "TASK_RUN_INVALID_STATUS", `Unsupported terminal task run status '${value}'`);
+  }
+  return value;
+}
+
+function assertFutureTaskRunTimestamp(value, reference, field) {
+  const valueTime = Date.parse(value);
+  const referenceTime = Date.parse(reference);
+  if (!Number.isFinite(valueTime) || !Number.isFinite(referenceTime) || valueTime <= referenceTime) {
+    throw new ApiError(400, "TASK_RUN_INVALID_LEASE", `${field} must be later than the current timestamp`);
+  }
+}
+
 function projectPrefix(projectId) {
   const prefix = projectId.toUpperCase().replace(/[^A-Z0-9]+/g, "");
   return (prefix || "TASK").slice(0, 12);
@@ -542,6 +695,66 @@ export class TaskboardDatabase {
       this.database.exec("ALTER TABLE tasks ADD COLUMN recurrence_unit TEXT");
     }
     this.#migrateTaskStatuses();
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS task_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL CHECK (attempt > 0),
+        status TEXT NOT NULL CHECK (status IN (
+          'queued', 'claimed', 'running', 'completed', 'failed', 'interrupted', 'canceled'
+        )),
+        lease_owner TEXT,
+        lease_expires_at TEXT,
+        heartbeat_at TEXT,
+        fencing_token TEXT,
+        codex_thread_id TEXT,
+        project_id TEXT,
+        codex_project_kind TEXT,
+        codex_host_id TEXT,
+        workspace_path TEXT,
+        branch TEXT,
+        worktree_path TEXT,
+        base_sha TEXT,
+        started_at TEXT,
+        finished_at TEXT,
+        exit_code INTEGER,
+        failure_class TEXT CHECK (failure_class IS NULL OR failure_class IN (
+          'preflight', 'provider_exit', 'provider_protocol', 'timeout', 'interrupted',
+          'workspace', 'git', 'verification', 'unknown'
+        )),
+        error TEXT,
+        output_summary TEXT,
+        verification_evidence TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (task_id, attempt)
+      );
+
+      CREATE INDEX IF NOT EXISTS task_runs_task_attempt
+        ON task_runs(task_id, attempt);
+
+      CREATE INDEX IF NOT EXISTS task_runs_task_created
+        ON task_runs(task_id, created_at, id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS task_runs_one_active
+        ON task_runs(task_id)
+        WHERE status IN ('claimed', 'running');
+
+      CREATE TABLE IF NOT EXISTS task_run_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES task_runs(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence > 0),
+        kind TEXT NOT NULL CHECK (length(kind) <= 128),
+        source TEXT NOT NULL CHECK (source IN ('taskboard', 'runner', 'codex')),
+        content TEXT NOT NULL CHECK (length(content) <= 8192),
+        data TEXT CHECK (data IS NULL OR length(data) <= 32768),
+        created_at TEXT NOT NULL,
+        UNIQUE (run_id, sequence)
+      );
+
+      CREATE INDEX IF NOT EXISTS task_run_events_run_sequence
+        ON task_run_events(run_id, sequence);
+    `);
     const migratedTaskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
     if (!migratedTaskColumns.some((column) => column.name === "creator_type")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN creator_type TEXT NOT NULL DEFAULT 'user'");
@@ -1173,6 +1386,401 @@ export class TaskboardDatabase {
       WHERE thread_id = ?
       ORDER BY created_at, rowid
     `).all(threadId).map(aiChatEventFromRow);
+  }
+
+  listTaskRuns(taskId, filters = {}) {
+    const where = [];
+    const values = [];
+    if (taskId !== undefined && taskId !== null) {
+      where.push("task_id = ?");
+      values.push(taskId);
+    }
+    if (filters.status !== undefined) {
+      const status = String(filters.status);
+      if (status !== "queued" && !TASK_RUN_TERMINAL_STATUSES.has(status) && !["claimed", "running"].includes(status)) {
+        throw new ApiError(400, "TASK_RUN_INVALID_STATUS", `Unsupported task run status '${status}'`);
+      }
+      where.push("status = ?");
+      values.push(status);
+    }
+    const rows = this.database.prepare(`
+      SELECT * FROM task_runs
+      ${where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY attempt, created_at, id
+    `).all(...values);
+    return rows.map(taskRunFromRow);
+  }
+
+  getTaskRun(id) {
+    const row = this.database.prepare("SELECT * FROM task_runs WHERE id = ?").get(id);
+    return row ? taskRunFromRow(row) : null;
+  }
+
+  createTaskRun(input) {
+    const id = input.id ?? randomUUID();
+    const taskId = boundedTaskRunText(input.taskId, "taskId", 256, { required: true });
+    const status = input.status ?? "queued";
+    if (status !== "queued") {
+      throw new ApiError(400, "TASK_RUN_INVALID_STATUS", "New task runs must start in queued status");
+    }
+    const timestamp = boundedTaskRunText(input.createdAt ?? now(), "createdAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const updatedAt = boundedTaskRunText(input.updatedAt ?? timestamp, "updatedAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const task = this.database.prepare(`
+        SELECT id, project_id, thread_id, git_branch, worktree_path, worktree_branch
+        FROM tasks
+        WHERE id = ?
+      `).get(taskId);
+      if (!task) {
+        throw new ApiError(404, "TASK_NOT_FOUND", `Task '${taskId}' does not exist`);
+      }
+      const project = this.database.prepare(`
+        SELECT id, workspace_path FROM projects WHERE id = ?
+      `).get(task.project_id);
+      const attempt = Number(this.database.prepare(`
+        SELECT COALESCE(MAX(attempt), 0) + 1 AS attempt
+        FROM task_runs
+        WHERE task_id = ?
+      `).get(taskId).attempt);
+      this.database.prepare(`
+        INSERT INTO task_runs (
+          id, task_id, attempt, status,
+          lease_owner, lease_expires_at, heartbeat_at, fencing_token,
+          codex_thread_id, project_id, codex_project_kind, codex_host_id,
+          workspace_path, branch, worktree_path, base_sha,
+          started_at, finished_at, exit_code, failure_class,
+          error, output_summary, verification_evidence,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, 'queued', NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)
+      `).run(
+        id,
+        taskId,
+        attempt,
+        boundedTaskRunText(input.codexThreadId ?? task.thread_id, "codexThreadId", 512),
+        boundedTaskRunText(input.projectId ?? task.project_id, "projectId", 256),
+        boundedTaskRunText(input.codexProjectKind, "codexProjectKind", 64),
+        boundedTaskRunText(input.codexHostId, "codexHostId", 256),
+        boundedTaskRunText(input.workspacePath ?? project?.workspace_path, "workspacePath", 4_096),
+        boundedTaskRunText(input.branch ?? task.git_branch ?? task.worktree_branch, "branch", 1_024),
+        boundedTaskRunText(input.worktreePath ?? task.worktree_path, "worktreePath", 4_096),
+        boundedTaskRunText(input.baseSha, "baseSha", 256),
+        boundedTaskRunJson(input.verificationEvidence, "verificationEvidence"),
+        timestamp,
+        updatedAt,
+      );
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTaskRun(id);
+  }
+
+  claimTaskRun(id, input) {
+    const timestamp = boundedTaskRunText(input.claimedAt ?? now(), "claimedAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const leaseOwner = boundedTaskRunText(input.leaseOwner, "leaseOwner", TASK_RUN_TEXT_LIMITS.leaseOwner, {
+      required: true,
+    });
+    const leaseExpiresAt = boundedTaskRunText(
+      input.leaseExpiresAt,
+      "leaseExpiresAt",
+      TASK_RUN_TEXT_LIMITS.timestamp,
+      { required: true },
+    );
+    const fencingToken = boundedTaskRunText(input.fencingToken, "fencingToken", 512, { required: true });
+    assertFutureTaskRunTimestamp(leaseExpiresAt, timestamp, "leaseExpiresAt");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`
+        UPDATE task_runs
+        SET status = 'claimed', lease_owner = ?, lease_expires_at = ?,
+            heartbeat_at = ?, fencing_token = ?, updated_at = ?
+        WHERE id = ? AND status = 'queued'
+      `).run(leaseOwner, leaseExpiresAt, timestamp, fencingToken, timestamp, id);
+      if (result.changes !== 1) this.#throwTaskRunConflict(id, "claim");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      if (
+        String(error?.message ?? error).includes("task_runs_one_active")
+        || String(error?.message ?? error).includes("task_runs.task_id")
+      ) {
+        throw new ApiError(409, "TASK_RUN_CONFLICT", `Task '${this.getTaskRun(id)?.taskId ?? id}' already has an active run`);
+      }
+      throw error;
+    }
+    return this.getTaskRun(id);
+  }
+
+  startTaskRun(id, input) {
+    const timestamp = boundedTaskRunText(input.startedAt ?? now(), "startedAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const leaseOwner = boundedTaskRunText(input.leaseOwner, "leaseOwner", TASK_RUN_TEXT_LIMITS.leaseOwner, {
+      required: true,
+    });
+    const fencingToken = boundedTaskRunText(input.fencingToken, "fencingToken", 512, { required: true });
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`
+        UPDATE task_runs
+        SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ?
+        WHERE id = ? AND status = 'claimed'
+          AND lease_owner = ? AND fencing_token = ?
+          AND lease_expires_at > ?
+      `).run(timestamp, timestamp, id, leaseOwner, fencingToken, timestamp);
+      if (result.changes !== 1) this.#throwTaskRunConflict(id, "start");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTaskRun(id);
+  }
+
+  heartbeatTaskRun(id, input) {
+    const timestamp = boundedTaskRunText(input.heartbeatAt ?? now(), "heartbeatAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const leaseExpiresAt = boundedTaskRunText(
+      input.leaseExpiresAt,
+      "leaseExpiresAt",
+      TASK_RUN_TEXT_LIMITS.timestamp,
+      { required: true },
+    );
+    const leaseOwner = boundedTaskRunText(input.leaseOwner, "leaseOwner", TASK_RUN_TEXT_LIMITS.leaseOwner, {
+      required: true,
+    });
+    const fencingToken = boundedTaskRunText(input.fencingToken, "fencingToken", 512, { required: true });
+    assertFutureTaskRunTimestamp(leaseExpiresAt, timestamp, "leaseExpiresAt");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`
+        UPDATE task_runs
+        SET lease_expires_at = ?, heartbeat_at = ?, updated_at = ?
+        WHERE id = ? AND status IN ('claimed', 'running')
+          AND lease_owner = ? AND fencing_token = ?
+          AND lease_expires_at > ?
+      `).run(leaseExpiresAt, timestamp, timestamp, id, leaseOwner, fencingToken, timestamp);
+      if (result.changes !== 1) this.#throwTaskRunConflict(id, "heartbeat");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTaskRun(id);
+  }
+
+  insertTaskRunEvent(runId, input) {
+    const id = input.id ?? randomUUID();
+    const timestamp = boundedTaskRunText(input.createdAt ?? now(), "createdAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const leaseOwner = boundedTaskRunText(input.leaseOwner, "leaseOwner", TASK_RUN_TEXT_LIMITS.leaseOwner, {
+      required: true,
+    });
+    const fencingToken = boundedTaskRunText(input.fencingToken, "fencingToken", 512, { required: true });
+    const kind = boundedTaskRunText(input.kind, "kind", TASK_RUN_TEXT_LIMITS.eventKind, { required: true });
+    const source = boundedTaskRunText(input.source, "source", TASK_RUN_TEXT_LIMITS.eventSource, { required: true });
+    if (!new Set(["taskboard", "runner", "codex"]).has(source)) {
+      throw new ApiError(400, "TASK_RUN_INVALID_EVENT_SOURCE", `Unsupported task run event source '${source}'`);
+    }
+    const content = boundedTaskRunText(input.content, "content", TASK_RUN_TEXT_LIMITS.eventContent, { required: true });
+    const data = boundedTaskRunJson(input.data, "data");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const authority = this.database.prepare(`
+        SELECT status, lease_expires_at, lease_owner, fencing_token
+        FROM task_runs
+        WHERE id = ?
+      `).get(runId);
+      if (!authority) this.#throwTaskRunConflict(runId, "append an event");
+      if (
+        !["claimed", "running"].includes(authority.status)
+        || authority.lease_owner !== leaseOwner
+        || authority.fencing_token !== fencingToken
+        || authority.lease_expires_at <= timestamp
+      ) {
+        this.#throwTaskRunConflict(runId, "append an event");
+      }
+      const sequence = Number(this.database.prepare(`
+        SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
+        FROM task_run_events
+        WHERE run_id = ?
+      `).get(runId).sequence);
+      this.database.prepare(`
+        INSERT INTO task_run_events (
+          id, run_id, sequence, kind, source, content, data, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, runId, sequence, kind, source, content, data, timestamp);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return taskRunEventFromRow(this.database.prepare(
+      "SELECT * FROM task_run_events WHERE id = ?",
+    ).get(id));
+  }
+
+  listTaskRunEvents(runId) {
+    if (!this.database.prepare("SELECT 1 FROM task_runs WHERE id = ?").get(runId)) {
+      throw new ApiError(404, "TASK_RUN_NOT_FOUND", `Task run '${runId}' does not exist`);
+    }
+    return this.database.prepare(`
+      SELECT * FROM task_run_events
+      WHERE run_id = ?
+      ORDER BY sequence
+    `).all(runId).map(taskRunEventFromRow);
+  }
+
+  updateTaskRunVerification(id, input) {
+    const verificationEvidence = boundedTaskRunJson(input.verificationEvidence, "verificationEvidence");
+    if (verificationEvidence === null) {
+      throw new ApiError(400, "TASK_RUN_INVALID_VERIFICATION", "verificationEvidence is required");
+    }
+    const timestamp = boundedTaskRunText(input.updatedAt ?? now(), "updatedAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const leaseOwner = boundedTaskRunText(input.leaseOwner, "leaseOwner", TASK_RUN_TEXT_LIMITS.leaseOwner, {
+      required: true,
+    });
+    const fencingToken = boundedTaskRunText(input.fencingToken, "fencingToken", 512, { required: true });
+    const serializedEvidence = verificationEvidence;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.database.prepare(`
+        SELECT * FROM task_runs WHERE id = ?
+      `).get(id);
+      if (!current) this.#throwTaskRunConflict(id, "record verification evidence");
+      if (
+        current.status !== "completed"
+        || current.lease_owner !== leaseOwner
+        || current.fencing_token !== fencingToken
+      ) {
+        this.#throwTaskRunConflict(id, "record verification evidence");
+      }
+      if (current.verification_evidence !== null && current.verification_evidence !== serializedEvidence) {
+        throw new ApiError(409, "TASK_RUN_CONFLICT", `Task run '${id}' already has different verification evidence`);
+      }
+      this.database.prepare(`
+        UPDATE task_runs
+        SET verification_evidence = ?, updated_at = ?
+        WHERE id = ? AND status = 'completed'
+          AND lease_owner = ? AND fencing_token = ?
+      `).run(serializedEvidence, timestamp, id, leaseOwner, fencingToken);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTaskRun(id);
+  }
+
+  completeTaskRun(id, input) {
+    const status = taskRunTerminalStatus(input.status ?? "completed");
+    const failureClass = taskRunFailureClass(input.failureClass);
+    if (["failed", "interrupted"].includes(status) && failureClass === null) {
+      throw new ApiError(400, "TASK_RUN_INVALID_FAILURE_CLASS", `${status} task runs require a failure class`);
+    }
+    if (status === "completed" && failureClass !== null) {
+      throw new ApiError(400, "TASK_RUN_INVALID_FAILURE_CLASS", "Completed task runs cannot have a failure class");
+    }
+    if (input.exitCode !== undefined && input.exitCode !== null && !Number.isInteger(input.exitCode)) {
+      throw new ApiError(400, "TASK_RUN_INVALID_EXIT_CODE", "Task run exitCode must be an integer or null");
+    }
+    const timestamp = boundedTaskRunText(input.finishedAt ?? now(), "finishedAt", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const leaseOwner = boundedTaskRunText(input.leaseOwner, "leaseOwner", TASK_RUN_TEXT_LIMITS.leaseOwner, {
+      required: true,
+    });
+    const fencingToken = boundedTaskRunText(input.fencingToken, "fencingToken", 512, { required: true });
+    const error = boundedTaskRunText(input.error, "error", TASK_RUN_TEXT_LIMITS.error);
+    const outputSummary = boundedTaskRunText(input.outputSummary, "outputSummary", TASK_RUN_TEXT_LIMITS.outputSummary);
+    const verificationEvidence = boundedTaskRunJson(input.verificationEvidence, "verificationEvidence");
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = this.database.prepare(`
+        UPDATE task_runs
+        SET status = ?, lease_expires_at = NULL, heartbeat_at = ?, finished_at = ?,
+            exit_code = ?, failure_class = ?, error = ?, output_summary = ?,
+            verification_evidence = ?, updated_at = ?
+        WHERE id = ? AND status IN ('claimed', 'running')
+          AND lease_owner = ? AND fencing_token = ?
+          AND lease_expires_at > ?
+      `).run(
+        status,
+        timestamp,
+        timestamp,
+        input.exitCode ?? null,
+        failureClass,
+        error,
+        outputSummary,
+        verificationEvidence,
+        timestamp,
+        id,
+        leaseOwner,
+        fencingToken,
+        timestamp,
+      );
+      if (result.changes !== 1) this.#throwTaskRunConflict(id, "complete");
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    return this.getTaskRun(id);
+  }
+
+  interruptExpiredTaskRuns(input = {}) {
+    const options = input ?? {};
+    const timestamp = typeof options === "string"
+      ? input
+      : options.timestamp ?? options.now ?? now();
+    const reason = typeof options === "string"
+      ? "Task run lease expired"
+      : options.reason ?? "Task run lease expired";
+    const safeTimestamp = boundedTaskRunText(timestamp, "timestamp", TASK_RUN_TEXT_LIMITS.timestamp, {
+      required: true,
+    });
+    const safeReason = boundedTaskRunText(reason, "reason", TASK_RUN_TEXT_LIMITS.error, { required: true });
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const expiredIds = this.database.prepare(`
+        SELECT id FROM task_runs
+        WHERE status IN ('claimed', 'running')
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at <= ?
+        ORDER BY task_id, attempt
+      `).all(safeTimestamp).map((row) => row.id);
+      const result = this.database.prepare(`
+        UPDATE task_runs
+        SET status = 'interrupted', lease_expires_at = NULL, heartbeat_at = ?,
+            finished_at = COALESCE(finished_at, ?), failure_class = 'interrupted',
+            error = COALESCE(error, ?), updated_at = ?
+        WHERE status IN ('claimed', 'running')
+          AND lease_expires_at IS NOT NULL
+          AND lease_expires_at <= ?
+      `).run(safeTimestamp, safeTimestamp, safeReason, safeTimestamp, safeTimestamp);
+      this.database.exec("COMMIT");
+      if (result.changes === 0 || expiredIds.length === 0) return [];
+      return this.database.prepare(`
+        SELECT * FROM task_runs
+        WHERE id IN (${expiredIds.map(() => "?").join(", ")})
+        ORDER BY task_id, attempt
+      `).all(...expiredIds).map(taskRunFromRow);
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   interruptAbandonedAiChatRuns() {
@@ -2076,6 +2684,19 @@ export class TaskboardDatabase {
       JSON.stringify(changes),
       timestamp,
     );
+  }
+
+  #throwTaskRunConflict(id, operation) {
+    const row = this.database.prepare(`
+      SELECT status, lease_expires_at FROM task_runs WHERE id = ?
+    `).get(id);
+    if (!row) {
+      throw new ApiError(404, "TASK_RUN_NOT_FOUND", `Task run '${id}' does not exist`);
+    }
+    throw new ApiError(409, "TASK_RUN_CONFLICT", `Task run '${id}' cannot ${operation}`, {
+      status: row.status,
+      leaseExpired: row.lease_expires_at !== null && row.lease_expires_at <= now(),
+    });
   }
 
   #touchTask(id, version, threadId, timestamp) {

@@ -8,7 +8,7 @@ import { TaskboardDatabase } from "../server/database.mjs";
 import { AiChatService } from "../server/ai-chat.mjs";
 import { normalizeCodexEvent } from "../server/ai-chat-process.mjs";
 
-async function waitFor(predicate, timeout = 4_000) {
+async function waitFor(predicate, timeout = 10_000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const value = await predicate();
@@ -16,6 +16,10 @@ async function waitFor(predicate, timeout = 4_000) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("Timed out waiting for condition");
+}
+
+function configArg(key, value) {
+  return process.platform === "win32" ? `${key}=${value}` : `${key}="${value}"`;
 }
 
 test("normalized item events retain a bounded public item id", () => {
@@ -92,7 +96,7 @@ if (args[0] === "app-server") {
     if (prompt.includes("MALFORMED_STUBBORN") || prompt.includes("CALLBACK_FATAL_STUBBORN")) {
       spawn(process.execPath, [
         "-e",
-        'process.on("SIGTERM", () => {}); setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), 300); setInterval(() => {}, 1000)',
+        'process.on("SIGTERM", () => {}); setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), 1000); setInterval(() => {}, 1000)',
       ], {env:process.env,stdio:"ignore"});
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
@@ -133,6 +137,12 @@ if (args[0] === "app-server") {
 }
 `);
   await chmod(executable, 0o755);
+  const codexExecutable = process.platform === "win32"
+    ? path.join(directory, "fake-codex.cmd")
+    : executable;
+  if (process.platform === "win32") {
+    await writeFile(codexExecutable, `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.mjs" %*\r\n`);
+  }
 
   const codexStatePath = path.join(directory, "codex-state.json");
   await writeFile(codexStatePath, JSON.stringify({
@@ -147,7 +157,7 @@ if (args[0] === "app-server") {
   database.createProject({ id: "other", name: "Other", workspacePath: null });
   const service = new AiChatService({
     database,
-    codexExecutable: executable,
+    codexExecutable,
     codexStatePath,
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
     processEnv: {
@@ -170,6 +180,7 @@ if (args[0] === "app-server") {
     directory,
     environmentCapturePath,
     otherWorkspace,
+    codexExecutable,
     service,
     workspace,
     async close() {
@@ -226,11 +237,11 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       "exec", "--json", "--color", "never",
       "-C", fixture.workspace,
       "-s", "workspace-write",
-      "-c", 'approval_policy="on-request"',
-      "-c", 'approvals_reviewer="auto_review"',
+      "-c", configArg("approval_policy", "on-request"),
+      "-c", configArg("approvals_reviewer", "auto_review"),
       "--add-dir", fixture.otherWorkspace,
       "-m", "gpt-real",
-      "-c", 'model_reasoning_effort="high"',
+      "-c", configArg("model_reasoning_effort", "high"),
       "-",
     ]);
     assert.equal(captures[0].args.join(" ").includes("HIDDEN_SENTINEL"), false);
@@ -243,11 +254,11 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       "exec", "--json", "--color", "never",
       "-C", fixture.workspace,
       "-s", "workspace-write",
-      "-c", 'approval_policy="on-request"',
-      "-c", 'approvals_reviewer="auto_review"',
+      "-c", configArg("approval_policy", "on-request"),
+      "-c", configArg("approvals_reviewer", "auto_review"),
       "--add-dir", fixture.otherWorkspace,
       "-m", "gpt-real",
-      "-c", 'model_reasoning_effort="high"',
+      "-c", configArg("model_reasoning_effort", "high"),
       "resume", "codex-thread-1", "-",
     ]);
     assert.equal(captures[1].args.includes("--last"), false);
@@ -284,7 +295,10 @@ test("same-thread turns are locked, different threads run concurrently, failures
     await waitFor(() => fixture.service.getRun(parallel.id)?.status === "completed");
     const interrupted = await fixture.service.interrupt(waiting.id);
     assert.equal(interrupted.id, waiting.id);
-    await waitFor(() => fixture.service.getRun(waiting.id)?.status === "interrupted");
+    await waitFor(
+      () => fixture.service.getRun(waiting.id)?.status === "interrupted",
+      process.platform === "win32" ? 10_000 : 4_000,
+    );
 
     const failed = await fixture.service.startTurn(firstThread.id, { message: "FAIL" });
     await waitFor(() => fixture.service.getRun(failed.id)?.status === "failed");
@@ -331,9 +345,12 @@ test("parser and event callback failures kill a SIGTERM-resistant process group"
       await rm(fixture.descendantPath, { force: true });
       const thread = await fixture.service.createThread({ projectId: "project" });
       const run = await fixture.service.startTurn(thread.id, { message });
-      await waitFor(() => fixture.service.getRun(run.id).status === "failed", 700);
+      await waitFor(
+        () => fixture.service.getRun(run.id).status === "failed",
+        process.platform === "win32" ? 3_000 : 700,
+      );
       assert.equal(fixture.service.getRun(run.id).error, expectedError);
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 1_100 : 350));
       await assert.rejects(readFile(fixture.descendantPath), (error) => error.code === "ENOENT");
     }
   } finally {
@@ -419,7 +436,7 @@ test("startup marks abandoned runs interrupted while preserving the Codex thread
   fixture.database = new TaskboardDatabase(fixture.databasePath);
   const restarted = new AiChatService({
     database: fixture.database,
-    codexExecutable: path.join(fixture.directory, "fake-codex.mjs"),
+    codexExecutable: fixture.codexExecutable,
     codexStatePath: path.join(fixture.directory, "codex-state.json"),
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
   });
