@@ -158,10 +158,11 @@ import http from "node:http";
 
 const host = process.env.CODEX_TASKBOARD_HOST || "127.0.0.1";
 const port = Number(process.env.CODEX_TASKBOARD_PORT || "47823");
+const instanceToken = process.env.CODEX_TASKBOARD_INSTANCE_TOKEN || "";
 const instanceSecret = process.env.CODEX_TASKBOARD_INSTANCE_SECRET || "";
 
 const server = http.createServer((req, res) => {
-  if (req.url === "/health") {
+  if (req.url === "/health" || req.url === `/${instanceToken}/health`) {
     const challenge = req.headers["x-codex-taskboard-challenge"];
     if (instanceSecret && typeof challenge !== "string") {
       res.statusCode = 401;
@@ -255,13 +256,16 @@ process.on("SIGTERM", shutdown);
   Assert-True ($null -ne $started.ProcessId -and $started.ProcessId -gt 0) "Started taskboard should record a process ID."
   Assert-Equal $started.Port $port "Started taskboard should use the requested port."
 
-  foreach ($name in @("pid.txt", "root.txt", "port.txt", "url.txt", "node.txt", "owner.txt", "instance-token.txt", "instance-secret.txt")) {
+  foreach ($name in @("pid.txt", "root.txt", "port.txt", "url.txt", "node.txt", "owner.txt", "instance-token.txt", "instance-secret.txt", "launcher-runtime.json")) {
     Assert-True (Test-Path -LiteralPath (Join-Path $stateRoot $name) -PathType Leaf) "Expected state file $name to exist after start."
   }
   Assert-Equal (Get-Content -LiteralPath (Join-Path $stateRoot "node.txt") | Select-Object -First 1) $started.NodePath "State should record the complete Node executable path."
   Assert-Equal (Get-Content -LiteralPath (Join-Path $stateRoot "owner.txt") | Select-Object -First 1) $started.OwnerMarker "State should record the unique owner marker."
   Assert-Equal (Get-Content -LiteralPath (Join-Path $stateRoot "instance-token.txt") | Select-Object -First 1) $started.InstanceToken "State should record the taskboard instance token."
   Assert-Equal (Get-Content -LiteralPath (Join-Path $stateRoot "instance-secret.txt") | Select-Object -First 1) $started.InstanceSecret "State should record the taskboard instance secret."
+  $runtimeDescriptor = Get-Content -LiteralPath (Join-Path $stateRoot "launcher-runtime.json") -Raw | ConvertFrom-Json
+  Assert-Equal $runtimeDescriptor.version 1 "Runtime descriptor should use version 1."
+  Assert-Equal $runtimeDescriptor.url ("http://127.0.0.1:{0}/{1}" -f $started.Port, $started.InstanceToken) "Runtime descriptor should point taskctl at the token-scoped service."
   Assert-Match $started.EmbedUrl ("*{0}*host=codex*" -f $started.InstanceToken) "Started taskboard should expose a token-scoped embed URL."
 
   $status = Get-CodexPlusTaskboardStatus -Root $taskboardRoot -Port $port -StateRoot $stateRoot
@@ -313,14 +317,16 @@ process.on("SIGTERM", shutdown);
   $wrongProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-Command", ("Start-Sleep -Seconds 60; Write-Output '{0}'" -f $wrongProcessToken)) -WindowStyle Hidden -PassThru
   Set-Content -LiteralPath (Join-Path $stateRoot "pid.txt") -Value ([string]$wrongProcess.Id) -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "root.txt") -Value $taskboardRoot -Encoding ASCII
-  Set-Content -LiteralPath (Join-Path $stateRoot "port.txt") -Value ([string]$port) -Encoding ASCII
-  Set-Content -LiteralPath (Join-Path $stateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $port) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $stateRoot "port.txt") -Value ([string]$started.Port) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $stateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $started.Port) -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "node.txt") -Value $started.NodePath -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "owner.txt") -Value $started.OwnerMarker -Encoding ASCII
 
   $wrongStatus = Get-CodexPlusTaskboardStatus -Root $taskboardRoot -StateRoot $stateRoot
   Assert-True ($null -ne (Get-Process -Id $wrongProcess.Id -ErrorAction SilentlyContinue)) "Status should not terminate a process for a wrong recorded PID."
-  Assert-Equal $wrongStatus.ProcessId $null "Status should clear the reported process ID when the recorded process is not launcher-owned."
+  Assert-Equal $wrongStatus.Healthy $true "Status should recover a healthy launcher-owned process from the recorded listening port."
+  Assert-Equal $wrongStatus.ProcessId $started.ProcessId "Status should report the recovered listening taskboard process ID."
+  Assert-Equal (Get-Content -LiteralPath (Join-Path $stateRoot "pid.txt") | Select-Object -First 1) ([string]$started.ProcessId) "Status should repair a stale PID state file from the validated listening process."
   Assert-True (Test-Path -LiteralPath (Join-Path $stateRoot "pid.txt") -PathType Leaf) "Status should not delete state files for a wrong recorded PID."
 
   Stop-TestOwnedProcess -Process $wrongProcess -ExecutablePath ((Get-Command powershell -ErrorAction Stop | Select-Object -First 1).Source) -Entrypoint "Start-Sleep" -OwnerToken $wrongProcessToken
@@ -331,8 +337,9 @@ process.on("SIGTERM", shutdown);
   $fakeNodeProcess = Start-Process -FilePath $nodeCommand.Source -ArgumentList @((Join-Path $decoyServerRoot "index.mjs"), ("--codex-plus-taskboard-owner-marker={0}" -f $fakeNodeToken)) -WorkingDirectory $decoyRoot -WindowStyle Hidden -PassThru
   Set-Content -LiteralPath (Join-Path $stateRoot "pid.txt") -Value ([string]$fakeNodeProcess.Id) -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "root.txt") -Value $taskboardRoot -Encoding ASCII
-  Set-Content -LiteralPath (Join-Path $stateRoot "port.txt") -Value ([string]$started.Port) -Encoding ASCII
-  Set-Content -LiteralPath (Join-Path $stateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $started.Port) -Encoding ASCII
+  $fakeNodePort = Get-FreeTcpPort
+  Set-Content -LiteralPath (Join-Path $stateRoot "port.txt") -Value ([string]$fakeNodePort) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $stateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $fakeNodePort) -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "node.txt") -Value $started.NodePath -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "owner.txt") -Value $started.OwnerMarker -Encoding ASCII
 
@@ -347,8 +354,9 @@ process.on("SIGTERM", shutdown);
   $fakeNodeProcess = $null
 
   $fullPathDecoyToken = "full-path-decoy-" + [guid]::NewGuid().ToString("N")
+  $fullPathDecoyPort = Get-FreeTcpPort
   $previousTaskboardPort = $env:CODEX_TASKBOARD_PORT
-  $env:CODEX_TASKBOARD_PORT = [string](Get-FreeTcpPort)
+  $env:CODEX_TASKBOARD_PORT = [string]$fullPathDecoyPort
   try {
     $fullPathDecoyProcess = Start-Process -FilePath $nodeCommand.Source -ArgumentList @((Join-Path $serverRoot "index.mjs"), ("--codex-plus-taskboard-owner-marker={0}" -f $fullPathDecoyToken)) -WorkingDirectory $taskboardRoot -WindowStyle Hidden -PassThru
   } finally {
@@ -360,8 +368,8 @@ process.on("SIGTERM", shutdown);
   }
   Set-Content -LiteralPath (Join-Path $stateRoot "pid.txt") -Value ([string]$fullPathDecoyProcess.Id) -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "root.txt") -Value $taskboardRoot -Encoding ASCII
-  Set-Content -LiteralPath (Join-Path $stateRoot "port.txt") -Value ([string]$started.Port) -Encoding ASCII
-  Set-Content -LiteralPath (Join-Path $stateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $started.Port) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $stateRoot "port.txt") -Value ([string]$fullPathDecoyPort) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $stateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $fullPathDecoyPort) -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "node.txt") -Value $nodeCommand.Source -Encoding ASCII
   Set-Content -LiteralPath (Join-Path $stateRoot "owner.txt") -Value $started.OwnerMarker -Encoding ASCII
 
@@ -392,7 +400,7 @@ process.on("SIGTERM", shutdown);
   Assert-Equal $stopped.Healthy $false "Stopped taskboard should not be healthy."
   Assert-Match $stopped.Reason "*was stopped*" "Stop without Root should stop the recorded custom-root taskboard."
   Assert-True ($null -eq (Get-Process -Id $started.ProcessId -ErrorAction SilentlyContinue)) "Taskboard process should no longer be running after stop."
-  foreach ($name in @("pid.txt", "root.txt", "port.txt", "url.txt", "node.txt", "owner.txt", "instance-token.txt", "instance-secret.txt")) {
+  foreach ($name in @("pid.txt", "root.txt", "port.txt", "url.txt", "node.txt", "owner.txt", "instance-token.txt", "instance-secret.txt", "launcher-runtime.json")) {
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $stateRoot $name))) "Expected state file $name to be removed after stop."
   }
 

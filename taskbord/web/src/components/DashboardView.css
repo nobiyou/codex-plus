@@ -740,7 +740,6 @@
   color: var(--text-tertiary);
   font-size: 10px;
 }
-
 .dashboard-view .dashboard-label-panel,
 .dashboard-view .dashboard-progress-panel {
   grid-column: auto;
@@ -952,6 +951,7 @@
   border-radius: 12px;
   background: var(--surface-hover);
   box-shadow: var(--card-shadow);
+  cursor: pointer;
 }
 
 .dashboard-view .dashboard-running-open {

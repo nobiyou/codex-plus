@@ -76,7 +76,7 @@ process.stdin.on("end", () => {
   });
   const task = createTask("Task-origin execution");
   const interruptedTask = createTask("Interrupted task-origin execution");
-  const taskRuns = new TaskRunService({ database, leaseMs: 2_000 });
+  const taskRuns = new TaskRunService({ database, leaseMs: 10_000 });
   const service = new AiChatService({
     database,
     taskRuns,

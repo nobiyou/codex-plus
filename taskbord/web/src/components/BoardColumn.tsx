@@ -58,7 +58,7 @@ export function StatusIcon({ status }: { status: TaskStatus }) {
   return <TaskboardIcon name={STATUS_ICONS[status]} />;
 }
 
-function ColumnStatusIcon({ status }: { status: TaskStatus }) {
+export function ColumnStatusIcon({ status }: { status: TaskStatus }) {
   return <TaskboardIcon name={COLUMN_STATUS_ICONS[status]} />;
 }
 
@@ -77,6 +77,10 @@ interface BoardColumnProps {
   contextMenuTaskId: string | null;
   availableLabels: string[];
   currentUser: ActorIdentity;
+  showCover: boolean;
+  showBody: boolean;
+  createEnabled?: boolean;
+  onCreateLabel: (label: string) => Promise<void>;
   onCreate: (status: TaskStatus) => void;
   onEdit: (task: Task) => void;
   onUpdate: (task: Task, changes: Partial<TaskDraft>) => Promise<Task>;
@@ -104,6 +108,10 @@ export function BoardColumn({
   contextMenuTaskId,
   availableLabels,
   currentUser,
+  showCover,
+  showBody,
+  createEnabled = true,
+  onCreateLabel,
   onCreate,
   onEdit,
   onUpdate,
@@ -183,19 +191,25 @@ export function BoardColumn({
           <span className={`column-status-icon status-icon-${details.tone}`}>
             <ColumnStatusIcon status={status} />
           </span>
-          <h2 id={`column-${status}`}>{label}</h2>
+          <h2 id={`column-${status}`}>
+            {label}{tasks.length > 0 && (
+              status === "todo" || status === "in_progress" || status === "in_review"
+            ) ? ` ${tasks.length}` : ""}
+          </h2>
         </div>
-        <div className="column-actions">
-          <button
-            type="button"
-            className="icon-button add-task-button"
-            onClick={() => onCreate(status)}
-            aria-label={text(`在${label}中新建议题`, `Create issue in ${label}`)}
-            title={text(`添加到${label}`, `Add to ${label}`)}
-          >
-            <TaskboardIcon name={COLUMN_ADD_ICONS[status] ?? "columnAdd"} />
-          </button>
-        </div>
+        {createEnabled && (
+          <div className="column-actions">
+            <button
+              type="button"
+              className="icon-button add-task-button"
+              onClick={() => onCreate(status)}
+              aria-label={text(`在${label}中新建议题`, `Create issue in ${label}`)}
+              title={text(`添加到${label}`, `Add to ${label}`)}
+            >
+              <TaskboardIcon name={COLUMN_ADD_ICONS[status] ?? "columnAdd"} />
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="column-list" ref={scrollRef}>
@@ -214,6 +228,9 @@ export function BoardColumn({
               isContextMenuOpen={contextMenuTaskId === task.id}
               availableLabels={availableLabels}
               currentUser={currentUser}
+              showCover={showCover}
+              showBody={showBody}
+              onCreateLabel={onCreateLabel}
               onEdit={onEdit}
               onUpdate={onUpdate}
               onComplete={onComplete}

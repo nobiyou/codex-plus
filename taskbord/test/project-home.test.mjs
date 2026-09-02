@@ -33,6 +33,12 @@ test("each device stores an independent workspace path for every project", () =>
   assert.match(apiSource, /\/api\/device-workspaces/);
 });
 
+test("imported Codex projects persist their exact device identity", () => {
+  assert.match(appSource, /const PROJECT_CODEX_IDENTITIES_KEY = "taskboard\.projectCodexIdentities\.v1"/);
+  assert.match(appSource, /codexProjectId: project\.id,[\s\S]*?codexProjectKind: project\.projectKind,[\s\S]*?codexHostId: project\.hostId,[\s\S]*?workspacePath: project\.workspacePath/);
+  assert.match(appSource, /setProjectCodexIdentities[\s\S]*?PROJECT_CODEX_IDENTITIES_KEY/);
+});
+
 test("project selection starts from the route or recent projects and updates the route", () => {
   assert.match(appSource, /const RECENT_PROJECT_IDS_KEY = "taskboard\.recentProjectIds\.v1"/);
   assert.match(appSource, /const initialProjectId = query\.get\("project"\) \?\? recentProjectIds\[0\] \?\? GLOBAL_PROJECT_ID/);
@@ -56,11 +62,12 @@ test("the selected project exposes the current board surfaces", () => {
 
 test("new issues stage attachments in the composer and upload them after creation", () => {
   assert.match(editorSource, /type="file"[\s\S]*?multiple/);
-  assert.match(editorSource, /<PendingAttachments[\s\S]*?uploadLabel="保存后上传"/);
+  assert.match(editorSource, /<PendingAttachments[\s\S]*?uploadLabel=\{text\("保存后上传", "Upload after saving"\)\}/);
   assert.match(pendingAttachmentsSource, /className="composer-attachment-list"/);
   assert.match(appSource, /Promise\.allSettled/);
-  assert.match(appSource, /uploadAttachment\(saved\.id, file\)/);
-  assert.match(appSource, /附件上传失败，可在详情页重试/);
+  assert.match(appSource, /uploadAttachment\(saved\.id, file, "attachment"\)/);
+  assert.match(appSource, /uploadAttachment\(saved\.id, image\.file, "inline"\)/);
+  assert.match(appSource, /zh: `\$\{failedAttachments\} 个附件`[\s\S]*?以下内容写入失败/);
 });
 
 test("the issue composer includes Linear-style labels and scheduling", () => {
@@ -79,7 +86,7 @@ test("the current project is shown only in navigation, not in issue creation or 
   assert.doesNotMatch(editorSource, /property-project|dialog-project-icon|project\?\.name/);
   assert.doesNotMatch(detailSource, /detail-property-label">项目|project-property-icon|project\.name/);
   assert.doesNotMatch(styles, /\.property-project|\.dialog-project-icon|\.project-property-icon/);
-  assert.match(appSource, /createTaskRequest\(selectedProjectId, savedDraft, threadId\)/);
+  assert.match(appSource, /createTaskRequest\(selectedProjectId, draft\)/);
   assert.match(appSource, /className="header-project-switcher"/);
 });
 

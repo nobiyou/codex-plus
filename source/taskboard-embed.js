@@ -99,7 +99,9 @@
   let openGeneration = 0;
   let pendingThreadCreation = null;
   let lastNativeThreadId = "";
+  let lastNativeThreadTitle = "";
   let lastNativeProjectId = "";
+  let requestedProjectId = "";
   let suspendedNativeBrowserPanel = null;
   let active = false;
   let destroyed = false;
@@ -277,10 +279,7 @@
     if (!scroll) return null;
     const buttons = Array.from(scroll.querySelectorAll("button"));
     const plugin = buttons.find((button) => buttonMatches(button, PLUGIN_LABELS));
-    if (plugin && plugin.parentElement) {
-      const siblings = Array.from(plugin.parentElement.children).filter((child) => child.tagName === "BUTTON");
-      if (siblings.length >= 3) return plugin;
-    }
+    if (plugin?.parentElement) return plugin;
 
     const firstSection = scroll.querySelector("[data-app-action-sidebar-section]");
     const sectionTop = firstSection?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY;
@@ -443,6 +442,49 @@
       || null;
   }
 
+  function threadTitleFromRow(row) {
+    const rowTitle = row?.getAttribute?.("data-app-action-sidebar-thread-title")
+      || row?.getAttribute?.("aria-label")
+      || "";
+    const titleNode = row?.querySelector?.(
+      "[data-app-action-sidebar-thread-title], [data-app-action-sidebar-thread-name], [data-app-action-sidebar-thread-label], .text-fade-truncate",
+    );
+    const raw = rowTitle
+      || titleNode?.textContent
+      || row?.textContent
+      || "";
+    return String(raw).replace(/\s+/g, " ").trim();
+  }
+
+  function projectIdForThreadRow(row) {
+    return row?.closest?.("[data-app-action-sidebar-project-list-id]")
+      ?.getAttribute("data-app-action-sidebar-project-list-id")
+      || row?.closest?.("[data-app-action-sidebar-project-id]")
+        ?.getAttribute("data-app-action-sidebar-project-id")
+      || "";
+  }
+
+  function readRecentConversations(projectId, currentThreadId = "") {
+    if (!projectId) return [];
+    const seen = new Set();
+    const rows = Array.from(document.querySelectorAll("[data-app-action-sidebar-thread-id]"));
+    const candidates = rows.filter((row) => projectIdForThreadRow(row) === projectId);
+    const currentRow = sidebarThreadRow(currentThreadId);
+    if (currentRow && projectIdForThreadRow(currentRow) === projectId && !candidates.includes(currentRow)) {
+      candidates.unshift(currentRow);
+    }
+    return candidates.flatMap((row) => {
+      const threadId = normalizeThreadId(row.getAttribute("data-app-action-sidebar-thread-id"));
+      if (!threadId || seen.has(threadId)) return [];
+      seen.add(threadId);
+      return [{
+        threadId,
+        title: threadTitleFromRow(row),
+        projectId,
+      }];
+    }).slice(0, 12);
+  }
+
   async function selectedNativeProjectId() {
     const bootstrap = await Promise.race([
       Promise.resolve().then(() => window.electronBridge?.getInitialSidebarBootstrap?.()),
@@ -513,7 +555,7 @@
         projects = readCodexProjects();
       } while ((projects.length === 0 || !activeThreadRow()) && Date.now() < deadline);
     }
-    const context = readHostContext(projects, lastNativeProjectId);
+    const context = readHostContext(projects, lastNativeProjectId, requestedProjectId);
     if (context.threadRunning && todoProgress) context.threadTodoProgress = todoProgress;
     expandedSections.forEach((candidate) => {
       if (candidate.isConnected && candidate.getAttribute("data-app-action-sidebar-section-collapsed") === "false") {
@@ -660,27 +702,52 @@
     };
   }
 
-  function readHostContext(projects = readCodexProjects(), preferredProjectId = lastNativeProjectId) {
+  function readHostContext(
+    projects = readCodexProjects(),
+    preferredProjectId = lastNativeProjectId,
+    projectOverride = "",
+  ) {
     const row = activeThreadRow();
     const activeThreadId = normalizeThreadId(row?.getAttribute("data-app-action-sidebar-thread-id"));
     const projectList = row?.closest?.("[data-app-action-sidebar-project-list-id]");
     const projectRow = row?.closest?.("[data-app-action-sidebar-project-id]")
       || document.querySelector('[data-app-action-sidebar-project-row][aria-current="page"]')
       || document.querySelector('[data-app-action-sidebar-project-row][data-app-action-sidebar-project-active="true"]');
-    const projectId = projectList?.getAttribute("data-app-action-sidebar-project-list-id")
+    const domProjectId = projectList?.getAttribute("data-app-action-sidebar-project-list-id")
       || projectRow?.getAttribute("data-app-action-sidebar-project-id")
-      || preferredProjectId
       || "";
+    const nativeProjectId = domProjectId || preferredProjectId || "";
+    const conversationProjectId = projectOverride || nativeProjectId;
+    if (domProjectId) lastNativeProjectId = domProjectId;
     const preferredThreadId = activeThreadId || lastNativeThreadId;
     const runningThreadId = normalizeThreadId(
-      nativeRunningThreadRow(preferredThreadId, projectId)
+      nativeRunningThreadRow(preferredThreadId, nativeProjectId)
         ?.getAttribute("data-app-action-sidebar-thread-id"),
     );
     const currentThreadId = activeThreadId || runningThreadId || lastNativeThreadId;
     if (activeThreadId || (!lastNativeThreadId && runningThreadId)) {
       lastNativeThreadId = currentThreadId;
+      const activeTitle = threadTitleFromRow(row);
+      if (activeTitle) lastNativeThreadTitle = activeTitle;
     }
     const threadId = currentThreadId || lastNativeThreadId || normalizeThreadId(threadIdFromLocation());
+    const recentConversations = readRecentConversations(
+      conversationProjectId,
+      conversationProjectId === nativeProjectId ? threadId : "",
+    );
+    const rememberedRow = sidebarThreadRow(threadId);
+    if (
+      threadId
+      && rememberedRow
+      && projectIdForThreadRow(rememberedRow) === conversationProjectId
+      && !recentConversations.some((conversation) => conversation.threadId === threadId)
+    ) {
+      recentConversations.unshift({
+        threadId,
+        title: threadTitleFromRow(rememberedRow || row) || lastNativeThreadTitle,
+        projectId: conversationProjectId,
+      });
+    }
     const workspacePath = workspaceFromLocation();
     const threadRunning = nativeThreadRunning(threadId);
     const payload = {
@@ -697,8 +764,9 @@
       if (todoProgress) payload.threadTodoProgress = todoProgress;
     }
     if (workspacePath) payload.workspacePath = workspacePath;
-    if (projectId) payload.projectId = projectId;
+    if (nativeProjectId) payload.projectId = nativeProjectId;
     if (threadId) payload.threadId = threadId;
+    if (recentConversations.length > 0) payload.recentConversations = recentConversations;
     return payload;
   }
 
@@ -722,7 +790,7 @@
   function postHostContext() {
     syncHostUiLanguage();
     if (!frame) return;
-    const liveContext = readHostContext();
+    const liveContext = readHostContext(readCodexProjects(), lastNativeProjectId, requestedProjectId);
     const payload = hostContextSnapshot
       ? {
           ...hostContextSnapshot,
@@ -888,9 +956,12 @@
       operation: payload.operation,
       taskboardProjectId: payload.taskboardProjectId,
       codexProjectId: payload.codexProjectId,
+      codexProjectKind: payload.codexProjectKind,
+      codexHostId: payload.codexHostId,
       projectName: payload.projectName,
       workspacePath: payload.workspacePath,
       skillPath: payload.skillPath,
+      ...(payload.targetThreadId === undefined ? {} : { targetThreadId: payload.targetThreadId }),
       ...(payload.automationId === undefined ? {} : { automationId: payload.automationId }),
       enabledByUser: payload.enabledByUser,
       quotaAware: payload.quotaAware,
@@ -1032,6 +1103,13 @@
       });
       frameReadyWaiters.clear();
       if (active) showFrame();
+      postHostContext();
+      return;
+    }
+    if (message.type === "taskboard:request-project-context") {
+      requestedProjectId = typeof message.payload?.projectId === "string"
+        ? message.payload.projectId.trim()
+        : "";
       postHostContext();
       return;
     }
@@ -1574,6 +1652,7 @@
     if (restoreFocus) lastFocusedElement?.focus?.();
     lastFocusedElement = null;
     hostContextSnapshot = null;
+    requestedProjectId = "";
   }
 
   function openTaskboard() {
@@ -1607,7 +1686,11 @@
   function onDocumentClick(event) {
     const threadRow = event.target?.closest?.("[data-app-action-sidebar-thread-id]");
     const clickedThreadId = normalizeThreadId(threadRow?.getAttribute?.("data-app-action-sidebar-thread-id"));
-    if (clickedThreadId) lastNativeThreadId = clickedThreadId;
+    if (clickedThreadId) {
+      lastNativeThreadId = clickedThreadId;
+      const clickedTitle = threadTitleFromRow(threadRow);
+      if (clickedTitle) lastNativeThreadTitle = clickedTitle;
+    }
     if (!active || !isNativePageNavigation(event.target)) return;
     closeTaskboard(false);
   }

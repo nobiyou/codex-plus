@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
 
 import {
@@ -7,14 +8,10 @@ import {
   buildTaskboardAutomationSpec,
   parseTaskboardAutomationHostRequest,
   reconcileTaskboardAutomation,
-  taskboardAutomationActivityKey,
-  taskboardAutomationBoardState,
-  taskboardAutomationGateDecision,
   taskboardAutomationPolicyOperation,
 } from "../shared/taskboard-automation.mjs";
 import {
   AUTOMATION_MODELS,
-  canonicalAutomationModel,
   isSupportedModelEffort,
   withAutomationModel,
 } from "../shared/taskboard-automation-options.mjs";
@@ -26,6 +23,8 @@ const baseRequest = {
   operation: "ensure-active",
   taskboardProjectId: "ppt-skill",
   codexProjectId: "codex-project-123",
+  codexProjectKind: "local",
+  codexHostId: "local",
   projectName: "PPT Skill",
   workspacePath: "/Users/example/Documents/ppt-skill",
   skillPath: "/Users/example/taskboard/skills/manage-taskboard/SKILL.md",
@@ -34,6 +33,29 @@ const baseRequest = {
   intervalMinutes: 5,
   model: "gpt-5.5",
   reasoningEffort: "high",
+};
+
+const remoteRequest = {
+  ...baseRequest,
+  codexProjectId: "remote-project-123",
+  codexProjectKind: "remote",
+  codexHostId: "remote-ssh-discovered:merlin-agent",
+  projectName: "Playground",
+  workspacePath: "/mlx_devbox/users/example/playground",
+  remoteProjects: [
+    {
+      codexProjectId: "remote-project-123",
+      codexProjectKind: "remote",
+      codexHostId: "remote-ssh-discovered:merlin-agent",
+      workspacePath: "/mlx_devbox/users/example/playground",
+    },
+    {
+      codexProjectId: "remote-worktree-456",
+      codexProjectKind: "remote",
+      codexHostId: "remote-ssh-discovered:merlin-agent",
+      workspacePath: "/mlx_devbox/users/example/playground-worktree",
+    },
+  ],
 };
 
 test("the automation model catalog matches Codex and normalizes unsupported efforts", () => {
@@ -91,8 +113,6 @@ test("the automation model catalog matches Codex and normalizes unsupported effo
     model: "gpt-5.6-luna",
     reasoningEffort: "medium",
   });
-  assert.equal(canonicalAutomationModel("gpt-5.6-sol-wm"), "gpt-5.6-sol");
-  assert.equal(canonicalAutomationModel("gpt-5.6-sol"), "gpt-5.6-sol");
 });
 
 test("the automation host request accepts only whitelisted project automation options", () => {
@@ -164,6 +184,29 @@ test("the automation host request accepts only whitelisted project automation op
     parseTaskboardAutomationHostRequest({ ...baseRequest, workspacePath: "relative/path" }),
     null,
   );
+  assert.deepEqual(parseTaskboardAutomationHostRequest(remoteRequest), remoteRequest);
+  const windowsRemoteRequest = {
+    ...remoteRequest,
+    workspacePath: String.raw`C:\Users\admin\Documents\dashi-taskboard`,
+    remoteProjects: [{
+      codexProjectId: "remote-project-123",
+      codexProjectKind: "remote",
+      codexHostId: "remote-ssh-discovered:merlin-agent",
+      workspacePath: String.raw`C:\Users\admin\Documents\dashi-taskboard`,
+    }],
+  };
+  assert.deepEqual(
+    parseTaskboardAutomationHostRequest(windowsRemoteRequest),
+    windowsRemoteRequest,
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...remoteRequest, codexHostId: "local" }),
+    null,
+  );
+  assert.equal(
+    parseTaskboardAutomationHostRequest({ ...baseRequest, codexHostId: "remote-host" }),
+    null,
+  );
 });
 
 test("the stable name and generated prompt are project-scoped and encode the claim protocol", () => {
@@ -181,34 +224,69 @@ test("the stable name and generated prompt are project-scoped and encode the cla
   assert.match(prompt, /PPT Skill/);
   assert.match(prompt, /每 5 分钟检查/);
   assert.match(prompt, /ppt-skill/);
-  assert.match(prompt, /issue list --project ppt-skill --archived false --json/);
-  assert.match(prompt, /NOT_FOUND/);
-  assert.match(prompt, /连接\/API 故障/);
-  assert.match(prompt, /明确收到成功的空任务列表（tasks=\[\]）/);
-  assert.match(prompt, /in_review（等你确认）或 blocked/);
-  assert.match(prompt, /每个项目同一时间只允许一个自动认领任务/);
-  assert.match(prompt, /不要仅因状态是 in_progress 就直接暂停/);
-  assert.match(prompt, /最新评论是新的用户评论（晚于最近一条 Agent 评论）/);
-  assert.match(prompt, /优先使用任务 threadId，其次使用最新评论的 threadId，向该原对话发送继续处理指令/);
-  assert.match(prompt, /用当前最新 version 添加一条简短评论/);
-  assert.match(prompt, /记录已转交的评论 ID/);
-  assert.match(prompt, /已有转交标记的评论/);
-  assert.match(prompt, /将当前自动化设为 PAUSED 并结束/);
-  assert.match(prompt, /不要重复转发已有转交标记的评论/);
   assert.match(prompt, /\/Users\/example\/Documents\/ppt-skill/);
-  assert.match(prompt, /每次仅处理一个 todo/);
+  assert.match(prompt, /每次仅处理一个符合依赖条件的 todo/);
   assert.match(prompt, /issue get/);
   assert.match(prompt, /comment list/);
-  assert.match(prompt, /最新评论中最近一条非空 threadId/);
-  assert.match(prompt, /若任务和评论都没有 threadId/);
-  assert.match(prompt, /不得在当前自动化会话创建、打开或认领新的 Codex 对话/);
-  assert.match(prompt, /保留 todo，报告缺少绑定对话/);
   assert.match(prompt, /最新 version/);
   assert.match(prompt, /in_progress/);
   assert.match(prompt, /版本冲突.*跳过/);
   assert.match(prompt, /关键改动、验证结果、执行结果和剩余风险/);
   assert.match(prompt, /in_review/);
   assert.match(prompt, /已绑定.*branch.*worktree/);
+});
+
+test("the remote automation prompt keeps taskctl local and delegates work to the SSH project", () => {
+  const prompt = buildTaskboardAutomationPrompt(remoteRequest);
+  assert.match(prompt, /仅在本机作为任务面板控制器运行/);
+  assert.match(prompt, /remote-ssh-discovered:merlin-agent/);
+  assert.match(prompt, /\/mlx_devbox\/users\/example\/playground/);
+  assert.match(prompt, /remote-worktree-456/);
+  assert.match(prompt, /\/mlx_devbox\/users\/example\/playground-worktree/);
+  assert.match(prompt, /Codex create_thread/);
+  assert.match(prompt, /projectId:actualTarget\.codexProjectId/);
+  assert.match(prompt, /同一保存主机当前可用的精确远程项目映射/);
+  assert.match(prompt, /developmentContext\.type 是 worktree[\s\S]*workspacePath 与 developmentContext\.path 完全相同/);
+  assert.match(prompt, /零项或多项[\s\S]*目标 SSH worktree 未映射[\s\S]*不认领、不 create、不写基础项目 binding/);
+  assert.match(prompt, /不得回退到基础 root、local、项目名、其他主机/);
+  assert.match(prompt, /Codex wait_threads/);
+  assert.match(prompt, /远程会话不运行 taskctl/);
+  assert.match(prompt, /完整 threadBinding 包含 threadId、codexProjectId、codexProjectKind、codexHostId、workspacePath/);
+  assert.match(prompt, /当前自动化的项目和主机只能作为未绑定议题的首次目标/);
+  assert.match(prompt, /存在 threadId 但没有完整 threadBinding[\s\S]*legacy local[\s\S]*--if-version[\s\S]*不得 send、create 或覆盖该绑定/);
+  assert.match(prompt, /所有认领、评论和状态写入只由当前本地控制器完成/);
+  assert.match(prompt, /已有完整 threadBinding 时，只能使用其保存的 threadId 和 codexHostId 调用 Codex send_message_to_thread/);
+  assert.doesNotMatch(prompt, /要求原远程会话按本协议判断和认领/);
+  assert.match(prompt, /未绑定时必须传 --clear-binding-thread/);
+  assert.match(prompt, /记录响应 task 的 version 为 ownedVersion[\s\S]*每次 issue move 都必须显式传 --if-version ownedVersion/);
+  assert.match(prompt, /create_thread 失败[\s\S]*ownedVersion[\s\S]*--if-version[\s\S]*--clear-binding-thread[\s\S]*移回 todo/);
+  assert.match(prompt, /发生 409[\s\S]*立即停止且不得重读最新 version 后覆盖/);
+  assert.match(prompt, /响应丢失或结果不确定[\s\S]*projectId 等于 ownedProjectId[\s\S]*状态仍为本轮 in_progress[\s\S]*threadBinding 为空或与本轮五字段 binding 完全相同/);
+  assert.match(prompt, /读到相同 binding 视为前次保存成功[\s\S]*读到不同 binding[\s\S]*立即退出/);
+  assert.match(prompt, /确定绑定写入失败[\s\S]*远程 threadId[\s\S]*移动到 blocked/);
+  assert.match(prompt, /wait_threads 失败[\s\S]*完整保存 binding[\s\S]*移动到 blocked/);
+  assert.match(prompt, /worker 确认后的每一次 issue move 都必须显式传完整远程 binding/);
+  assert.match(prompt, /不得扫描或接管其他 in_progress/);
+  assert.match(prompt, /移动到 in_review/);
+});
+
+test("the generated automation command uses an argv runtime file instead of an env assignment", () => {
+  const previous = process.env.CODEX_TASKBOARD_RUNTIME_FILE;
+  process.env.CODEX_TASKBOARD_RUNTIME_FILE = "/Users/example/Library/Application Support/Codex Taskboard/launcher-runtime.json";
+  try {
+    const prompt = buildTaskboardAutomationPrompt(baseRequest);
+    const cliPath = path.resolve(path.dirname(baseRequest.skillPath), "../..", "cli/taskctl.mjs");
+    assert.ok(prompt.includes(
+      `'${process.execPath}' '${cliPath}' --runtime-file '${process.env.CODEX_TASKBOARD_RUNTIME_FILE}'`,
+    ));
+    assert.doesNotMatch(prompt, /CODEX_TASKBOARD_RUNTIME_FILE=/);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CODEX_TASKBOARD_RUNTIME_FILE;
+    } else {
+      process.env.CODEX_TASKBOARD_RUNTIME_FILE = previous;
+    }
+  }
 });
 
 test("the generated cron spec uses the selected whitelisted local Codex options", () => {
@@ -235,9 +313,20 @@ test("the generated cron spec uses the selected whitelisted local Codex options"
     reasoningEffort: "medium",
     rrule: "RRULE:FREQ=MINUTELY;INTERVAL=30",
   });
+  assert.deepEqual(buildTaskboardAutomationSpec(remoteRequest), {
+    kind: "cron",
+    name: "Taskboard 自动认领 · ppt-skill",
+    prompt: buildTaskboardAutomationPrompt(remoteRequest),
+    projectId: null,
+    executionEnvironment: "local",
+    localEnvironmentConfigPath: null,
+    model: "gpt-5.5",
+    reasoningEffort: "high",
+    rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
+  });
 });
 
-test("passive policy checks resume a user-enabled automation after an idle pause", () => {
+test("passive policy checks resume only after quota recovery", () => {
   const passiveAvailable = {
     explicit: false,
     previousQuotaState: "available",
@@ -249,14 +338,14 @@ test("passive policy checks resume a user-enabled automation after an idle pause
       { ...baseRequest, quotaAware: true },
       passiveAvailable,
     ),
-    "ensure-active",
+    "list",
   );
   assert.equal(
     taskboardAutomationPolicyOperation(
       { ...baseRequest, quotaAware: true },
       { ...passiveAvailable, quotaState: "unknown" },
     ),
-    "ensure-active",
+    "list",
   );
   assert.equal(
     taskboardAutomationPolicyOperation(
@@ -344,170 +433,6 @@ test("ensure-active is idempotent when the listed automation already matches", a
   assert.deepEqual(response, { item: existing });
 });
 
-test("the board gate runs resumable work and pauses review or blocked work", () => {
-  assert.equal(taskboardAutomationBoardState([]), "pause");
-  assert.equal(taskboardAutomationBoardState([{ status: "backlog" }]), "pause");
-  assert.equal(taskboardAutomationBoardState([{ status: "todo" }]), "ready");
-  assert.equal(taskboardAutomationBoardState([{ status: "in_progress" }]), "ready");
-  assert.equal(taskboardAutomationBoardState([
-    { status: "todo" },
-    { status: "in_progress" },
-  ]), "ready");
-  assert.equal(taskboardAutomationBoardState([{ status: "in_review" }]), "pause");
-  assert.equal(taskboardAutomationBoardState([{ status: "blocked" }]), "pause");
-  assert.equal(taskboardAutomationBoardState([
-    { status: "todo" },
-    { status: "in_review" },
-  ]), "pause");
-  assert.equal(taskboardAutomationBoardState(null), "unknown");
-});
-
-test("automation activity keys are stable by task id and change with task activity", () => {
-  const first = {
-    id: "task-b",
-    status: "in_progress",
-    version: 2,
-    activityKey: "comments-v2",
-    activityUpdatedAt: "2026-08-15T14:00:00.000Z",
-  };
-  const second = {
-    id: "task-a",
-    status: "todo",
-    version: 1,
-    activityKey: "comments-v1",
-    activityUpdatedAt: "2026-08-15T13:00:00.000Z",
-  };
-  assert.equal(
-    taskboardAutomationActivityKey([first, second]),
-    taskboardAutomationActivityKey([second, first]),
-  );
-  assert.notEqual(
-    taskboardAutomationActivityKey([first, second]),
-    taskboardAutomationActivityKey([{ ...first, activityKey: "comments-v3" }, second]),
-  );
-  assert.equal(taskboardAutomationActivityKey(null), null);
-});
-
-test("automation gate allows one native run per taskboard activity generation", () => {
-  const baseline = taskboardAutomationGateDecision({
-    enabledByUser: true,
-    explicit: true,
-    currentLastRunAt: 100,
-    currentActivityKey: "activity-a",
-    gate: null,
-  });
-  assert.deepEqual(baseline, {
-    operation: "ensure-active",
-    gate: { lastRunAt: 100, activityKey: "activity-a", armed: true },
-    reason: "explicit",
-  });
-
-  const observed = taskboardAutomationGateDecision({
-    enabledByUser: true,
-    explicit: false,
-    currentLastRunAt: 200,
-    currentActivityKey: "activity-a",
-    gate: baseline.gate,
-  });
-  assert.deepEqual(observed, {
-    operation: "pause",
-    gate: { lastRunAt: 200, activityKey: "activity-a", armed: false },
-    reason: "run-observed",
-    runObserved: true,
-  });
-
-  assert.equal(taskboardAutomationGateDecision({
-    enabledByUser: true,
-    explicit: false,
-    currentLastRunAt: 200,
-    currentActivityKey: "activity-a",
-    gate: observed.gate,
-  }).reason, "waiting-for-activity");
-
-  const rearmed = taskboardAutomationGateDecision({
-    enabledByUser: true,
-    explicit: false,
-    currentLastRunAt: 200,
-    currentActivityKey: "activity-b",
-    gate: observed.gate,
-  });
-  assert.deepEqual(rearmed, {
-    operation: "ensure-active",
-    gate: { lastRunAt: 200, activityKey: "activity-b", armed: true },
-    reason: "activity-changed",
-  });
-
-  assert.equal(taskboardAutomationGateDecision({
-    enabledByUser: true,
-    explicit: false,
-    currentLastRunAt: null,
-    currentActivityKey: "activity-b",
-    automationExists: false,
-    gate: observed.gate,
-  }).reason, "automation-missing");
-
-  assert.deepEqual(taskboardAutomationGateDecision({
-    enabledByUser: false,
-    explicit: false,
-    currentLastRunAt: 200,
-    currentActivityKey: "activity-b",
-    gate: rearmed.gate,
-  }), { operation: "pause", gate: null, reason: "disabled" });
-});
-
-test("in-progress work reaches policy evaluation when quota tracking is disabled", () => {
-  const boardState = taskboardAutomationBoardState([{ status: "in_progress" }]);
-  const operation = boardState === "pause"
-    ? "pause"
-    : taskboardAutomationPolicyOperation(
-      { ...baseRequest, quotaAware: false },
-      {
-        explicit: true,
-        previousQuotaState: undefined,
-        quotaState: undefined,
-        currentStatus: "PAUSED",
-      },
-    );
-
-  assert.equal(boardState, "ready");
-  assert.equal(operation, "ensure-active");
-});
-
-test("ensure-active pauses active duplicate automations and keeps one canonical rule", async () => {
-  const canonical = {
-    id: "automation-canonical",
-    status: "ACTIVE",
-    ...buildTaskboardAutomationSpec(baseRequest),
-  };
-  const duplicate = {
-    id: "automation-duplicate",
-    status: "ACTIVE",
-    ...buildTaskboardAutomationSpec(baseRequest),
-  };
-  const calls = [];
-  const response = await reconcileTaskboardAutomation(
-    { ...baseRequest, automationId: canonical.id },
-    async (method, params) => {
-      calls.push({ method, params });
-      if (method === "list-automations") return { items: [canonical, duplicate] };
-      return { item: params };
-    },
-  );
-
-  assert.deepEqual(calls, [
-    { method: "list-automations", params: {} },
-    {
-      method: "automation-update",
-      params: {
-        ...buildTaskboardAutomationSpec(baseRequest),
-        id: duplicate.id,
-        status: "PAUSED",
-      },
-    },
-  ]);
-  assert.deepEqual(response, { item: canonical });
-});
-
 test("a foreign automation id never grants control outside the project", async () => {
   const foreign = {
     id: "foreign-automation",
@@ -576,7 +501,6 @@ test("pause never creates and list returns only sanitized matching project autom
     id: "matching",
     status: "ACTIVE",
     ...buildTaskboardAutomationSpec(baseRequest),
-    lastRunAt: 1_786_803_961_570,
     untrustedListField: "must not be echoed into an update",
   };
   const unrelated = {
@@ -638,7 +562,6 @@ test("pause never creates and list returns only sanitized matching project autom
       model: "gpt-5.5",
       reasoningEffort: "high",
       rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
-      lastRunAt: 1_786_803_961_570,
     }],
   });
 
@@ -653,25 +576,6 @@ test("pause never creates and list returns only sanitized matching project autom
     async () => ({ items: [invalidPair] }),
   );
   assert.deepEqual(invalidListed, { items: [] });
-
-  const runtimeAlias = {
-    ...matching,
-    id: "runtime-alias",
-    model: "gpt-5.6-sol-wm",
-    reasoningEffort: "low",
-  };
-  const normalizedAlias = await reconcileTaskboardAutomation(
-    { ...baseRequest, operation: "list" },
-    async () => ({ items: [runtimeAlias] }),
-  );
-  assert.deepEqual(normalizedAlias.items[0], {
-    id: "runtime-alias",
-    status: "ACTIVE",
-    model: "gpt-5.6-sol",
-    reasoningEffort: "low",
-    rrule: "RRULE:FREQ=MINUTELY;INTERVAL=5",
-    lastRunAt: 1_786_803_961_570,
-  });
 });
 
 test("pause is idempotent for an already paused matching automation", async () => {

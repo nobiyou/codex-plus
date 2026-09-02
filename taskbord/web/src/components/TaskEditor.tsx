@@ -2,12 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent } from "react";
 import { ApiError } from "../api";
 import {
+  taskPriorityLabel,
+  taskStatusLabel,
+  useTaskboardI18n,
+  type TaskboardLanguage,
+} from "../i18n";
+import {
   TASK_PRIORITIES,
   TASK_STATUSES,
   type ActorIdentity,
   type DevelopmentContext,
   type DevelopmentScan,
-  type HostConversation,
+  type HostRecentConversation,
   type Recurrence,
   type Task,
   type TaskDraft,
@@ -39,20 +45,38 @@ import {
 } from "./InlineMediaComposer";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 
-const PRIORITY_LABELS: Record<TaskPriority, string> = {
-  none: "无优先级",
-  urgent: "紧急",
-  high: "高",
-  medium: "中",
-  low: "低",
+const RECURRENCE_UNITS: Record<TaskboardLanguage, Record<Recurrence["unit"], string>> = {
+  zh: {
+    day: "天",
+    week: "周",
+    month: "月",
+    year: "年",
+  },
+  en: {
+    day: "day",
+    week: "week",
+    month: "month",
+    year: "year",
+  },
 };
 
-const RECURRENCE_UNITS: Record<Recurrence["unit"], string> = {
-  day: "天",
-  week: "周",
-  month: "月",
-  year: "年",
-};
+type TaskEditorError = string | readonly [string, string];
+type DraftRelationMenu = "parent" | "related" | "subIssue";
+
+export interface NewTaskRelationDraft {
+  parentId: string | null;
+  relatedIds: string[];
+  subIssueIds: string[];
+}
+
+export interface NewTaskCreateOptions {
+  keepOpen: boolean;
+  relations: NewTaskRelationDraft;
+  conversationMode: NewTaskConversationMode;
+  conversationThreadId: string | null;
+}
+
+export type NewTaskConversationMode = "new" | "existing";
 
 export interface NewTaskEditorDraft {
   title: string;
@@ -65,34 +89,30 @@ export interface NewTaskEditorDraft {
   startDate: string;
   dueDate: string;
   recurrence: Recurrence | null;
-  conversationMode: ConversationMode;
-  conversationThreadId?: string | null;
+  conversationMode: NewTaskConversationMode;
+  conversationThreadId: string | null;
   attachments: File[];
+  relations: NewTaskRelationDraft;
 }
-
-export type ConversationMode = "new" | "current" | "history";
-
-export type TaskEditorSaveDraft = TaskDraft & {
-  conversationMode?: ConversationMode;
-  conversationThreadId?: string | null;
-};
 
 interface TaskEditorProps {
   task: Task | null;
+  tasks: Task[];
+  referenceTasks: Task[];
   initialStatus: TaskStatus;
   initialDraft: NewTaskEditorDraft | null;
   labels: string[];
   currentUser: ActorIdentity;
   developmentScan: DevelopmentScan;
   developmentScanLoading: boolean;
-  currentThreadId?: string | null;
-  recentConversations?: HostConversation[];
+  recentConversations: HostRecentConversation[];
+  onCreateLabel: (label: string) => Promise<void>;
   onCancel: (draft: NewTaskEditorDraft | null) => void;
   onSave: (
-    draft: TaskEditorSaveDraft,
+    draft: TaskDraft,
     attachments: File[],
     inlineImages: PendingInlineImage[],
-    threadId?: string,
+    createOptions?: NewTaskCreateOptions,
   ) => Promise<void>;
 }
 
@@ -114,8 +134,8 @@ function endOfWeek(): string {
   return isoDate(date);
 }
 
-function displayDate(value: string): string {
-  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" })
+function displayDate(value: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" })
     .format(new Date(`${value}T12:00:00`));
 }
 
@@ -123,26 +143,33 @@ function contextValue(context: DevelopmentContext | null): string {
   return context ? JSON.stringify(context) : "";
 }
 
-function contextLabel(context: DevelopmentContext): string {
+function contextLabel(
+  context: DevelopmentContext,
+  text: (chinese: string, english: string) => string,
+): string {
   if (context.type === "branch") return context.branch;
   const folder = context.path.split(/[\\/]/).filter(Boolean).at(-1) ?? context.path;
-  return `${context.branch ?? "detached"} · ${folder}`;
+  return `${context.branch ?? text("分离 HEAD", "detached")} · ${folder}`;
 }
 
 export function TaskEditor({
   task,
+  tasks,
+  referenceTasks,
   initialStatus,
   initialDraft,
   labels: availableLabels,
   currentUser,
   developmentScan,
   developmentScanLoading,
-  currentThreadId,
-  recentConversations: availableConversations = [],
+  recentConversations,
+  onCreateLabel,
   onCancel,
   onSave,
 }: TaskEditorProps) {
+  const { language, locale, text } = useTaskboardI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const backdropPointerRef = useRef({ down: false, up: false });
   const titleRef = useRef<HTMLTextAreaElement>(null);
   const descriptionComposerRef = useRef<InlineMediaComposerHandle>(null);
@@ -161,17 +188,23 @@ export function TaskEditor({
   const [startDate] = useState(task?.startDate ?? initialDraft?.startDate ?? "");
   const [dueDate, setDueDate] = useState(task?.dueDate ?? initialDraft?.dueDate ?? "");
   const [recurrence, setRecurrence] = useState<Recurrence | null>(task?.recurrence ?? initialDraft?.recurrence ?? null);
-  const [conversationMode, setConversationMode] = useState<ConversationMode>(
+  const [conversationMode, setConversationMode] = useState<NewTaskConversationMode>(
     initialDraft?.conversationMode ?? "new",
   );
   const [conversationThreadId, setConversationThreadId] = useState<string | null>(
     initialDraft?.conversationThreadId ?? null,
   );
-  const [menu, setMenu] = useState<"status" | "priority" | "assignee" | "labels" | "more" | "due" | "recurrence" | null>(null);
+  const [parentId, setParentId] = useState<string | null>(initialDraft?.relations.parentId ?? null);
+  const [relatedIds, setRelatedIds] = useState<string[]>(initialDraft?.relations.relatedIds ?? []);
+  const [subIssueIds, setSubIssueIds] = useState<string[]>(initialDraft?.relations.subIssueIds ?? []);
+  const [createMore, setCreateMore] = useState(false);
+  const [menu, setMenu] = useState<"status" | "priority" | "assignee" | "labels" | "development" | "conversation-mode" | "conversation" | "more" | "due" | "recurrence" | null>(null);
+  const [relationMenu, setRelationMenu] = useState<DraftRelationMenu | null>(null);
+  const [moreMenuPosition, setMoreMenuPosition] = useState<{ right: number; bottom: number } | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [error, setError] = useState<TaskEditorError | null>(null);
+  const [attachmentError, setAttachmentError] = useState<TaskEditorError | null>(null);
   const [attachments, setAttachments] = useState<File[]>(initialDraft?.attachments ?? []);
 
   const developmentOptions = useMemo(() => {
@@ -182,40 +215,90 @@ export function TaskEditor({
     return options;
   }, [developmentContext, developmentScan.contexts]);
 
+  const taskById = useMemo(() => new Map(tasks.map((candidate) => [candidate.id, candidate])), [tasks]);
+  const availableRelationTasks = tasks.filter((candidate) => candidate.archivedAt === null);
+  const selectedParent = parentId ? taskById.get(parentId) ?? null : null;
+  const selectedRelated = relatedIds
+    .map((id) => taskById.get(id))
+    .filter((candidate): candidate is Task => candidate !== undefined);
+  const selectedSubIssues = subIssueIds
+    .map((id) => taskById.get(id))
+    .filter((candidate): candidate is Task => candidate !== undefined);
+  const selectedRelationChips = [
+    ...selectedSubIssues.map((issue) => ({ type: "subIssue" as const, issue })),
+    ...(selectedParent ? [{ type: "parent" as const, issue: selectedParent }] : []),
+    ...selectedRelated.map((issue) => ({ type: "related" as const, issue })),
+  ];
+  const selectedParentAncestorIds = useMemo(() => {
+    const ids = new Set<string>();
+    let currentId = parentId;
+    while (currentId && !ids.has(currentId)) {
+      ids.add(currentId);
+      currentId = taskById.get(currentId)?.relations.parent?.id ?? null;
+    }
+    return ids;
+  }, [parentId, taskById]);
+  const selectedSubIssueDescendantIds = useMemo(() => {
+    const ids = new Set<string>();
+    const queue = [...subIssueIds];
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      if (ids.has(currentId)) continue;
+      ids.add(currentId);
+      queue.push(...(taskById.get(currentId)?.relations.subIssues.map((item) => item.id) ?? []));
+    }
+    return ids;
+  }, [subIssueIds, taskById]);
+  const parentCandidates = availableRelationTasks.filter((candidate) => (
+    !selectedSubIssueDescendantIds.has(candidate.id)
+  ));
+  const relatedCandidates = availableRelationTasks;
+  const subIssueCandidates = availableRelationTasks.filter((candidate) => (
+    !selectedParentAncestorIds.has(candidate.id)
+  ));
+  const relationCandidates = relationMenu === "parent"
+    ? parentCandidates
+    : relationMenu === "related"
+      ? relatedCandidates
+      : subIssueCandidates;
+  const selectedRelationIds = new Set(
+    relationMenu === "parent"
+      ? parentId ? [parentId] : []
+      : relationMenu === "related"
+        ? relatedIds
+        : subIssueIds,
+  );
+
   const assigneeOptions = [task?.assignee, currentUser, CODEX_AGENT_ACTOR]
     .filter((actor): actor is ActorIdentity => actor !== undefined)
     .filter((actor, index, actors) => (
       actors.findIndex((candidate) => actorKey(candidate) === actorKey(actor)) === index
     ));
 
-  const conversationOptions = useMemo(() => {
-    const options = [...availableConversations];
-    if (
-      conversationMode === "history"
-      && conversationThreadId
-      && !options.some((option) => option.threadId === conversationThreadId)
-    ) {
-      options.unshift({ threadId: conversationThreadId, title: "历史对话" });
-    }
-    const seen = new Set<string>();
-    return options
-      .filter((option) => {
-        const threadId = option.threadId.trim();
-        if (!threadId || seen.has(threadId)) return false;
-        seen.add(threadId);
-        return true;
-      })
-      .map((option) => ({
-        threadId: option.threadId.trim(),
-        title: option.title.trim() || "未命名对话",
-      }))
-      .slice(0, 12);
-  }, [availableConversations, conversationMode, conversationThreadId]);
+  const conversationOptions = useMemo(() => recentConversations.map((conversation) => ({
+    value: conversation.threadId,
+    label: conversation.title || conversation.threadId,
+    icon: <LinearIcon name="conversation" />,
+  })), [recentConversations]);
+  const conversationPickerOptions = conversationOptions.length > 0
+    ? conversationOptions
+    : [{
+        value: "",
+        label: text("暂无已有对话", "No existing conversations"),
+        icon: <LinearIcon name="conversation" />,
+      }];
 
-  const currentConversation = conversationOptions.find((option) => option.threadId === currentThreadId?.trim());
-  const historicalConversations = conversationOptions.filter(
-    (option) => option.threadId !== currentThreadId?.trim(),
-  );
+  useEffect(() => {
+    if (task || conversationMode !== "existing") return;
+    if (conversationOptions.length === 0) {
+      setConversationMode("new");
+      setConversationThreadId(null);
+      return;
+    }
+    if (!conversationThreadId || !conversationOptions.some((option) => option.value === conversationThreadId)) {
+      setConversationThreadId(conversationOptions[0].value);
+    }
+  }, [conversationMode, conversationOptions, conversationThreadId, task]);
 
   useEffect(() => {
     dialogRef.current?.showModal();
@@ -224,6 +307,50 @@ export function TaskEditor({
       if (dialogRef.current?.open) dialogRef.current.close();
     };
   }, []);
+
+  useEffect(() => {
+    if (menu !== "more" && menu !== "due" && menu !== "recurrence") return;
+    const closeFromOutside = (event: PointerEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node)) setMenu(null);
+    };
+    document.addEventListener("pointerdown", closeFromOutside);
+    return () => document.removeEventListener("pointerdown", closeFromOutside);
+  }, [menu]);
+
+  useEffect(() => {
+    if (menu !== "more") {
+      setRelationMenu(null);
+      setMoreMenuPosition(null);
+    }
+  }, [menu]);
+
+  function toggleDraftRelation(candidate: Task) {
+    if (relationMenu === "parent") {
+      setParentId((current) => current === candidate.id ? null : candidate.id);
+    } else if (relationMenu === "related") {
+      setRelatedIds((current) => current.includes(candidate.id)
+        ? current.filter((id) => id !== candidate.id)
+        : [...current, candidate.id]);
+    } else if (relationMenu === "subIssue") {
+      setSubIssueIds((current) => current.includes(candidate.id)
+        ? current.filter((id) => id !== candidate.id)
+        : [...current, candidate.id]);
+    }
+  }
+
+  function toggleMoreMenu() {
+    setRelationMenu(null);
+    if (menu === "more") {
+      setMenu(null);
+      return;
+    }
+    const rect = moreMenuRef.current?.getBoundingClientRect();
+    setMoreMenuPosition(rect ? {
+      right: window.innerWidth - rect.right,
+      bottom: window.innerHeight - rect.top + 8,
+    } : null);
+    setMenu("more");
+  }
 
   useEffect(() => {
     const titleElement = titleRef.current;
@@ -258,12 +385,25 @@ export function TaskEditor({
     }
     const cleanTitle = title.trim();
     if (!cleanTitle) {
-      setError("请为议题填写一个简短、明确的标题。");
+      setError([
+        "请为议题填写一个简短、明确的标题。",
+        "Enter a short, clear issue title.",
+      ]);
       titleRef.current?.focus();
       return;
     }
     if (recurrence && !dueDate) {
-      setError("重复议题需要先设置最早截止日期。");
+      setError([
+        "重复议题需要先设置最早截止日期。",
+        "A recurring issue needs an initial due date.",
+      ]);
+      return;
+    }
+    if (!task && conversationMode === "existing" && !conversationThreadId) {
+      setError([
+        "请选择一个已有对话，或切换为新建对话。",
+        "Choose an existing conversation or switch to a new conversation.",
+      ]);
       return;
     }
 
@@ -276,13 +416,6 @@ export function TaskEditor({
       const descriptionValue = task
         ? description.trim()
         : serializeInlineMedia(descriptionSegments).trim();
-      const selectedThreadId = !task
-        ? conversationMode === "current"
-          ? currentThreadId ?? undefined
-          : conversationMode === "history"
-            ? conversationThreadId ?? undefined
-            : undefined
-        : undefined;
       await onSave({
         title: cleanTitle,
         description: descriptionValue,
@@ -294,18 +427,34 @@ export function TaskEditor({
         startDate: startDate || null,
         dueDate: dueDate || null,
         recurrence,
-        ...(!task ? {
-          conversationMode,
-          conversationThreadId: selectedThreadId ?? null,
-        } : {}),
-      }, attachments, inlineMediaImages(descriptionSegments),
-      selectedThreadId,
-      );
+      }, attachments, inlineMediaImages(descriptionSegments), task ? undefined : {
+        keepOpen: createMore,
+        relations: { parentId, relatedIds, subIssueIds },
+        conversationMode,
+        conversationThreadId,
+      });
+      if (!task && createMore) {
+        setTitle("");
+        setDescriptionSegments(createInlineMediaSegments());
+        setAttachments([]);
+        setSubIssueIds([]);
+        setConversationMode("new");
+        setConversationThreadId(null);
+        setRelationMenu(null);
+        setAttachmentError(null);
+        if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+        requestAnimationFrame(() => titleRef.current?.focus());
+      }
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "VERSION_CONFLICT") {
-        setError("这个议题已在其他位置发生变更，请关闭并刷新后重试。");
+        setError([
+          "这个议题已在其他位置发生变更，请关闭并刷新后重试。",
+          "This issue changed elsewhere. Close the editor, refresh, and try again.",
+        ]);
       } else {
-        setError(caught instanceof Error ? caught.message : "无法保存这个议题。");
+        setError(caught instanceof Error
+          ? caught.message
+          : ["无法保存这个议题。", "Could not save this issue."]);
       }
     } finally {
       setSaving(false);
@@ -313,6 +462,7 @@ export function TaskEditor({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLFormElement>) {
+    if (event.defaultPrevented) return;
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key !== "Enter") return;
     if (!task && (event.metaKey || event.ctrlKey)) {
@@ -330,7 +480,10 @@ export function TaskEditor({
     const selected = Array.from(files);
     const oversized = selected.find((file) => file.size > MAX_ATTACHMENT_SIZE);
     if (oversized) {
-      setAttachmentError(`“${oversized.name}” 超过 25 MB，无法上传。`);
+      setAttachmentError([
+        `“${oversized.name}” 超过 25 MB，无法上传。`,
+        `“${oversized.name}” is larger than 25 MB and cannot be uploaded.`,
+      ]);
       return;
     }
     setAttachmentError(null);
@@ -360,6 +513,7 @@ export function TaskEditor({
       conversationMode,
       conversationThreadId,
       attachments,
+      relations: { parentId, relatedIds, subIssueIds },
     });
   }
 
@@ -395,13 +549,26 @@ export function TaskEditor({
       <form className={`task-form${task ? "" : " is-creating"}`} onSubmit={handleSubmit} onKeyDown={handleKeyDown}>
         <header className="dialog-header">
           <div className="dialog-context">
-            <strong id="task-dialog-title">{task ? task.identifier : "新建议题"}</strong>
+            <strong id="task-dialog-title">{task ? task.identifier : text("新建议题", "New issue")}</strong>
           </div>
           <div className="dialog-header-actions">
-            <button type="button" className="icon-button dialog-expand" aria-label={expanded ? "收起编辑器" : "展开编辑器"} onClick={() => setExpanded((current) => !current)}>
+            <button
+              type="button"
+              className="icon-button dialog-expand"
+              aria-label={expanded
+                ? text("收起编辑器", "Collapse editor")
+                : text("展开编辑器", "Expand editor")}
+              onClick={() => setExpanded((current) => !current)}
+            >
               <LinearIcon name="expand" />
             </button>
-            <button type="button" className="icon-button dialog-close" onClick={cancelEditor} disabled={saving} aria-label="关闭编辑器">
+            <button
+              type="button"
+              className="icon-button dialog-close"
+              onClick={cancelEditor}
+              disabled={saving}
+              aria-label={text("关闭编辑器", "Close editor")}
+            >
               <LinearIcon name="close" />
             </button>
           </div>
@@ -409,95 +576,39 @@ export function TaskEditor({
 
         <div className="form-body">
           <label className="composer-title">
-            <span className="sr-only">标题</span>
-            <textarea ref={titleRef} rows={1} value={title} onChange={(event) => setTitle(event.target.value.replace(/\n/g, ""))} placeholder="Issue title" maxLength={240} autoComplete="off" />
+            <span className="sr-only">{text("标题", "Title")}</span>
+            <textarea ref={titleRef} rows={1} value={title} onChange={(event) => setTitle(event.target.value.replace(/\n/g, ""))} placeholder={text("议题标题", "Issue title")} maxLength={240} autoComplete="off" />
           </label>
           {task ? (
             <label className="composer-description">
-              <span className="sr-only">描述</span>
-              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Add description…" rows={5} />
+              <span className="sr-only">{text("描述", "Description")}</span>
+              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder={text("添加描述…", "Add description…")} rows={5} />
             </label>
           ) : (
             <InlineMediaComposer
               ref={descriptionComposerRef}
               className="composer-description inline-media-description"
               segments={descriptionSegments}
-              placeholder="Add description…"
-              ariaLabel="描述"
+              mentionTasks={tasks}
+              referenceTasks={referenceTasks}
+              placeholder={text("添加描述…", "Add description…")}
+              ariaLabel={text("描述", "Description")}
               disabled={saving}
               onChange={setDescriptionSegments}
               onError={setAttachmentError}
             />
           )}
 
-          {!task && (currentThreadId || historicalConversations.length > 0) && (
-            <fieldset className="conversation-binding-control">
-              <legend>关联对话</legend>
-              <div className="conversation-binding-options" role="radiogroup" aria-label="新任务对话">
-                <label className={conversationMode === "new" ? "is-selected" : ""}>
-                  <input
-                    type="radio"
-                    name="new-task-conversation"
-                    value="new"
-                    checked={conversationMode === "new"}
-                    onChange={() => setConversationMode("new")}
-                  />
-                  <span className="conversation-option-copy">
-                    <strong>新建独立对话</strong>
-                  </span>
-                </label>
-                {currentThreadId && (
-                  <label className={conversationMode === "current" ? "is-selected" : ""}>
-                    <input
-                      type="radio"
-                      name="new-task-conversation"
-                      value="current"
-                      checked={conversationMode === "current"}
-                      onChange={() => {
-                        setConversationMode("current");
-                        setConversationThreadId(null);
-                      }}
-                    />
-                    <span className="conversation-option-copy" title={currentThreadId}>
-                      <strong>当前对话</strong>
-                      <small>{currentConversation?.title || "未命名对话"}</small>
-                    </span>
-                  </label>
-                )}
-                {historicalConversations.map((conversation) => (
-                  <label
-                    className={conversationMode === "history" && conversationThreadId === conversation.threadId ? "is-selected" : ""}
-                    key={conversation.threadId}
-                  >
-                    <input
-                      type="radio"
-                      name="new-task-conversation"
-                      value={conversation.threadId}
-                      checked={conversationMode === "history" && conversationThreadId === conversation.threadId}
-                      onChange={() => {
-                        setConversationMode("history");
-                        setConversationThreadId(conversation.threadId);
-                      }}
-                    />
-                    <span className="conversation-option-copy" title={conversation.title}>
-                      <strong>{conversation.title}</strong>
-                      <small>最近对话</small>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
-
           {!task && (
             <PendingAttachments
               files={attachments}
               disabled={saving}
-              uploadLabel="保存后上传"
-              ariaLabel="待上传附件"
+              uploadLabel={text("保存后上传", "Upload after saving")}
+              ariaLabel={text("待上传附件", "Pending attachments")}
               onRemove={(index) => setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}
             />
           )}
+
         </div>
 
         <div className="task-form-dock">
@@ -506,13 +617,13 @@ export function TaskEditor({
               value={status}
               options={TASK_STATUSES.map((value) => ({
                 value,
-                label: STATUS_DETAILS[value].label,
+                label: taskStatusLabel(language, value),
                 icon: <StatusIcon status={value} />,
                 className: `status-icon-${STATUS_DETAILS[value].tone}`,
               }))}
               open={menu === "status"}
               triggerClassName="property-control property-status"
-              ariaLabel="状态"
+              ariaLabel={text("状态", "Status")}
               onOpenChange={(open) => setMenu(open ? "status" : null)}
               onChange={setStatus}
             />
@@ -520,13 +631,13 @@ export function TaskEditor({
               value={priority}
               options={TASK_PRIORITIES.map((value) => ({
                 value,
-                label: PRIORITY_LABELS[value],
+                label: taskPriorityLabel(language, value),
                 icon: <LinearPriorityIcon priority={value} />,
                 className: `priority-${value}`,
               }))}
               open={menu === "priority"}
               triggerClassName={`property-control property-priority priority-${priority}`}
-              ariaLabel="优先级"
+              ariaLabel={text("优先级", "Priority")}
               onOpenChange={(open) => setMenu(open ? "priority" : null)}
               onChange={setPriority}
             />
@@ -534,12 +645,14 @@ export function TaskEditor({
               value={actorKey(assignee)}
               options={assigneeOptions.map((actor) => ({
                 value: actorKey(actor),
-                label: actor.id === currentUser.id ? `${actor.name}（我）` : actor.name,
+                label: actor.id === currentUser.id
+                  ? `${actor.name}${text("（我）", " (me)")}`
+                  : actor.name,
                 icon: <ActorAvatar actor={actor} className="task-property-assignee-avatar" />,
               }))}
               open={menu === "assignee"}
               triggerClassName="property-control property-assignee"
-              ariaLabel="负责人"
+              ariaLabel={text("负责人", "Assignee")}
               onOpenChange={(open) => setMenu(open ? "assignee" : null)}
               onChange={(value) => {
                 const selected = assigneeOptions.find((actor) => actorKey(actor) === value);
@@ -554,64 +667,206 @@ export function TaskEditor({
               showIcon
               onOpenChange={(open) => setMenu(open ? "labels" : null)}
               onChange={setSelectedLabels}
+              onCreateLabel={onCreateLabel}
             />
 
-            <label className="property-control property-development" title={developmentScan.workspacePath ?? undefined}>
-              <LinearIcon name="branch" />
-              <span className="sr-only">代码分支或 Worktree</span>
-              <select
-                value={contextValue(developmentContext)}
-                disabled={developmentScanLoading}
-                onChange={(event) => setDevelopmentContext(event.target.value ? JSON.parse(event.target.value) as DevelopmentContext : null)}
-              >
-                <option value="">{developmentScanLoading ? "正在扫描 Git…" : "分支 / Worktree"}</option>
-                <optgroup label="代码分支">
-                  {developmentOptions.filter((context) => context.type === "branch").map((context) => <option value={contextValue(context)} key={contextValue(context)}>{contextLabel(context)}</option>)}
-                </optgroup>
-                <optgroup label="Worktree">
-                  {developmentOptions.filter((context) => context.type === "worktree").map((context) => <option value={contextValue(context)} key={contextValue(context)}>{contextLabel(context)}</option>)}
-                </optgroup>
-              </select>
-            </label>
+            <TaskPropertyPicker
+              value={contextValue(developmentContext)}
+              options={[
+                {
+                  value: "",
+                  label: developmentScanLoading
+                    ? text("正在扫描 Git…", "Scanning Git…")
+                    : text("分支 / Worktree", "Branch / worktree"),
+                  icon: <LinearIcon name="branch" />,
+                },
+                ...developmentOptions.map((context) => ({
+                  value: contextValue(context),
+                  label: contextLabel(context, text),
+                  icon: <LinearIcon name={context.type === "branch" ? "branch" : "folder"} />,
+                })),
+              ]}
+              open={menu === "development"}
+              disabled={developmentScanLoading}
+              triggerClassName="property-control property-development"
+              ariaLabel={text("代码分支或 Worktree", "Code branch or worktree")}
+              title={developmentScan.workspacePath ?? undefined}
+              onOpenChange={(open) => setMenu(open ? "development" : null)}
+              onChange={(value) => setDevelopmentContext(value ? JSON.parse(value) as DevelopmentContext : null)}
+            />
 
-            {dueDate && <button className="property-control" type="button" onClick={() => setMenu("due")}><span>截止 {displayDate(dueDate)}</span></button>}
-            {recurrence && <button className="property-control" type="button" onClick={() => setMenu("recurrence")}><span>每 {recurrence.interval} {RECURRENCE_UNITS[recurrence.unit]}</span></button>}
+            {!task && (
+              <>
+                <TaskPropertyPicker
+                  value={conversationMode}
+                  options={[
+                    {
+                      value: "new" as const,
+                      label: text("新建对话", "New conversation"),
+                      icon: <LinearIcon name="plus" />,
+                    },
+                    ...(recentConversations.length > 0 ? [{
+                      value: "existing" as const,
+                      label: text("已有对话", "Existing conversation"),
+                      icon: <LinearIcon name="link" />,
+                    }] : []),
+                  ]}
+                  open={menu === "conversation-mode"}
+                  triggerClassName="property-control property-conversation-mode"
+                  ariaLabel={text("任务对话方式", "Task conversation mode")}
+                  onOpenChange={(open) => setMenu(open ? "conversation-mode" : null)}
+                  onChange={(value) => {
+                    setConversationMode(value);
+                    if (value === "new") setConversationThreadId(null);
+                    else if (!conversationThreadId && conversationOptions[0]) {
+                      setConversationThreadId(conversationOptions[0].value);
+                    }
+                  }}
+                />
+                {conversationMode === "existing" && (
+                  <TaskPropertyPicker
+                    value={conversationThreadId ?? ""}
+                    options={conversationPickerOptions}
+                    open={menu === "conversation"}
+                    disabled={conversationOptions.length === 0}
+                    triggerClassName="property-control property-conversation"
+                    ariaLabel={text("选择已有对话", "Choose existing conversation")}
+                    title={text("选择当前项目中的已有 Codex 对话", "Choose an existing Codex conversation in this project")}
+                    onOpenChange={(open) => setMenu(open ? "conversation" : null)}
+                    onChange={setConversationThreadId}
+                  />
+                )}
+              </>
+            )}
 
-            <div className="composer-menu-anchor">
-              <button className="property-control property-more" type="button" aria-label="更多属性" onClick={() => setMenu(menu === "more" ? null : "more")}><LinearIcon name="more" /></button>
+            {dueDate && (
+              <button className="property-control" type="button" onClick={() => setMenu("due")}>
+                <span>{text(
+                  `截止 ${displayDate(dueDate, locale)}`,
+                  `Due ${displayDate(dueDate, locale)}`,
+                )}</span>
+              </button>
+            )}
+            {recurrence && (
+              <button className="property-control" type="button" onClick={() => setMenu("recurrence")}>
+                <span>{text(
+                  `每 ${recurrence.interval} ${RECURRENCE_UNITS.zh[recurrence.unit]}`,
+                  `Every ${recurrence.interval} ${RECURRENCE_UNITS.en[recurrence.unit]}${recurrence.interval === 1 ? "" : "s"}`,
+                )}</span>
+              </button>
+            )}
+
+            {!task && selectedRelationChips.map(({ type, issue }) => {
+              const identifier = issue.externalKey ?? issue.identifier;
+              const relationLabel = type === "subIssue"
+                ? text("子", "Sub")
+                : type === "parent"
+                  ? text("父", "Parent")
+                  : text("关联", "Related");
+              return (
+                <span className="property-control property-relation-chip" key={`${type}:${issue.id}`}>
+                  <span className="property-relation-kind">{relationLabel}</span>
+                  <span>{identifier}</span>
+                  <span className="property-relation-tooltip" role="tooltip">{issue.title}</span>
+                  <button
+                    className="property-relation-remove"
+                    type="button"
+                    aria-label={text(`移除 ${identifier}`, `Remove ${identifier}`)}
+                    onClick={() => {
+                      if (type === "parent") setParentId(null);
+                      else if (type === "related") {
+                        setRelatedIds((current) => current.filter((id) => id !== issue.id));
+                      } else {
+                        setSubIssueIds((current) => current.filter((id) => id !== issue.id));
+                      }
+                    }}
+                  >
+                    <LinearIcon name="close" />
+                  </button>
+                </span>
+              );
+            })}
+
+            <div className="composer-menu-anchor" ref={moreMenuRef}>
+              <button className="property-control property-more" type="button" aria-label={text("更多属性", "More properties")} onClick={toggleMoreMenu}><LinearIcon name="more" /></button>
               {menu === "more" && (
-                <div className="composer-popover more-popover">
-                  <button type="button" onClick={() => setMenu("due")}><span><LinearIcon name="calendarAdd" /></span><strong>设置截止日期</strong><kbd>⇧ D</kbd><b><LinearIcon name="chevronRight" /></b></button>
-                  <button type="button" onClick={() => setMenu("recurrence")}><span><LinearIcon name="recurrence" /></span><strong>设置重复…</strong><b><LinearIcon name="chevronRight" /></b></button>
+                <div
+                  className="composer-popover more-popover"
+                  role="menu"
+                  style={moreMenuPosition ? {
+                    position: "fixed",
+                    top: "auto",
+                    right: moreMenuPosition.right,
+                    bottom: moreMenuPosition.bottom,
+                    left: "auto",
+                  } : undefined}
+                >
+                  <button type="button" onClick={() => setMenu("due")}><span><LinearIcon name="calendarAdd" /></span><strong>{text("设置截止日期", "Set due date")}</strong><kbd>⇧ D</kbd><b><LinearIcon name="chevronRight" /></b></button>
+                  <button type="button" onClick={() => setMenu("recurrence")}><span><LinearIcon name="recurrence" /></span><strong>{text("设置重复…", "Set recurrence…")}</strong><b><LinearIcon name="chevronRight" /></b></button>
+                  {!task && (
+                    <>
+                      <div className="more-popover-divider" />
+                      <button className={relationMenu === "subIssue" ? "is-open" : undefined} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={relationMenu === "subIssue"} onClick={() => setRelationMenu("subIssue")}><span><LinearIcon name="plus" /></span><strong>{text("添加子议题", "Add sub-issue")}</strong>{selectedSubIssues.length > 0 && <small>{text(`${selectedSubIssues.length} 个已选`, `${selectedSubIssues.length} selected`)}</small>}<b><LinearIcon name="chevronRight" /></b></button>
+                      <button className={relationMenu === "parent" ? "is-open" : undefined} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={relationMenu === "parent"} onClick={() => setRelationMenu("parent")}><span><LinearIcon name="plus" /></span><strong>{text("添加父议题", "Add parent issue")}</strong>{selectedParent && <small>{selectedParent.externalKey ?? selectedParent.identifier}</small>}<b><LinearIcon name="chevronRight" /></b></button>
+                      <button className={relationMenu === "related" ? "is-open" : undefined} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={relationMenu === "related"} onClick={() => setRelationMenu("related")}><span><LinearIcon name="link" /></span><strong>{text("添加关联议题", "Add related issue")}</strong>{selectedRelated.length > 0 && <small>{text(`${selectedRelated.length} 个已选`, `${selectedRelated.length} selected`)}</small>}<b><LinearIcon name="chevronRight" /></b></button>
+                      {relationMenu && (
+                        <div className="task-create-relation-submenu" role="menu" aria-label={text("选择关系议题", "Select relation issue")}>
+                          {relationCandidates.length > 0 ? relationCandidates.map((candidate) => {
+                            const selected = selectedRelationIds.has(candidate.id);
+                            return (
+                              <button className={selected ? "is-selected" : undefined} type="button" role="menuitemcheckbox" aria-checked={selected} key={candidate.id} onClick={() => toggleDraftRelation(candidate)}>
+                                <StatusIcon status={candidate.status} />
+                                <span className="issue-relation-option-id">{candidate.externalKey ?? candidate.identifier}</span>
+                                <span className="issue-relation-option-title">{candidate.title}</span>
+                                <span className="task-create-relation-check">{selected && <LinearIcon name="check" />}</span>
+                              </button>
+                            );
+                          }) : (
+                            <p className="issue-relation-empty">{text("没有可选议题", "No issues available")}</p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
               {menu === "due" && (
                 <div className="composer-popover due-popover">
-                  <label className="custom-date-row"><span>自定义…</span><input type="date" value={dueDate} onChange={(event) => chooseDueDate(event.target.value)} /></label>
-                  <button type="button" onClick={() => chooseDueDate(dateFromNow(1))}><strong>明天</strong><span>{displayDate(dateFromNow(1))}</span></button>
-                  <button type="button" onClick={() => chooseDueDate(endOfWeek())}><strong>本周结束</strong><span>{displayDate(endOfWeek())}</span></button>
-                  <button type="button" onClick={() => chooseDueDate(dateFromNow(7))}><strong>一周后</strong><span>{displayDate(dateFromNow(7))}</span></button>
-                  {dueDate && <button className="destructive-menu-row" type="button" onClick={() => { setDueDate(""); setRecurrence(null); setMenu(null); }}>清除截止日期</button>}
+                  <label className="custom-date-row"><span>{text("自定义…", "Custom…")}</span><input type="date" value={dueDate} onChange={(event) => chooseDueDate(event.target.value)} /></label>
+                  <button type="button" onClick={() => chooseDueDate(dateFromNow(1))}><strong>{text("明天", "Tomorrow")}</strong><span>{displayDate(dateFromNow(1), locale)}</span></button>
+                  <button type="button" onClick={() => chooseDueDate(endOfWeek())}><strong>{text("本周结束", "End of this week")}</strong><span>{displayDate(endOfWeek(), locale)}</span></button>
+                  <button type="button" onClick={() => chooseDueDate(dateFromNow(7))}><strong>{text("一周后", "In one week")}</strong><span>{displayDate(dateFromNow(7), locale)}</span></button>
+                  {dueDate && <button className="destructive-menu-row" type="button" onClick={() => { setDueDate(""); setRecurrence(null); setMenu(null); }}>{text("清除截止日期", "Clear due date")}</button>}
                 </div>
               )}
               {menu === "recurrence" && (
                 <div className="composer-popover recurrence-popover">
-                  <label><span>最早截止日期</span><input type="date" value={dueDate || dateFromNow(7)} onChange={(event) => setDueDate(event.target.value)} /></label>
-                  <label><span>重复频率</span><span className="recurrence-controls"><input type="number" min="1" max="365" value={recurrence?.interval ?? 1} onChange={(event) => setRecurrence({ interval: Number(event.target.value), unit: recurrence?.unit ?? "week" })} /><select value={recurrence?.unit ?? "week"} onChange={(event) => setRecurrence({ interval: recurrence?.interval ?? 1, unit: event.target.value as Recurrence["unit"] })}>{Object.entries(RECURRENCE_UNITS).map(([unit, label]) => <option value={unit} key={unit}>{label}</option>)}</select></span></label>
-                  <button className="recurrence-save" type="button" onClick={() => { if (!dueDate) setDueDate(dateFromNow(7)); if (!recurrence) setRecurrence({ interval: 1, unit: "week" }); setMenu(null); }}>设置重复</button>
-                  {recurrence && <button className="destructive-menu-row" type="button" onClick={() => { setRecurrence(null); setMenu(null); }}>清除重复</button>}
+                  <label><span>{text("最早截止日期", "Initial due date")}</span><input type="date" value={dueDate || dateFromNow(7)} onChange={(event) => setDueDate(event.target.value)} /></label>
+                  <label><span>{text("重复频率", "Repeat frequency")}</span><span className="recurrence-controls"><input type="number" min="1" max="365" value={recurrence?.interval ?? 1} onChange={(event) => setRecurrence({ interval: Number(event.target.value), unit: recurrence?.unit ?? "week" })} /><select value={recurrence?.unit ?? "week"} onChange={(event) => setRecurrence({ interval: recurrence?.interval ?? 1, unit: event.target.value as Recurrence["unit"] })}>{Object.entries(RECURRENCE_UNITS[language]).map(([unit, label]) => <option value={unit} key={unit}>{label}</option>)}</select></span></label>
+                  <button className="recurrence-save" type="button" onClick={() => { if (!dueDate) setDueDate(dateFromNow(7)); if (!recurrence) setRecurrence({ interval: 1, unit: "week" }); setMenu(null); }}>{text("设置重复", "Set recurrence")}</button>
+                  {recurrence && <button className="destructive-menu-row" type="button" onClick={() => { setRecurrence(null); setMenu(null); }}>{text("清除重复", "Clear recurrence")}</button>}
                 </div>
               )}
             </div>
           </div>
 
-          {attachmentError && <div className="form-error" role="alert">{attachmentError}</div>}
-          {error && <div className="form-error" role="alert">{error}</div>}
+          {attachmentError && (
+            <div className="form-error" role="alert">
+              {typeof attachmentError === "string"
+                ? attachmentError
+                : text(attachmentError[0], attachmentError[1])}
+            </div>
+          )}
+          {error && (
+            <div className="form-error" role="alert">
+              {typeof error === "string" ? error : text(error[0], error[1])}
+            </div>
+          )}
 
           <footer className="dialog-footer">
             {!task && (
               <>
-                <button className="composer-attach-icon" type="button" disabled={saving} onClick={() => attachmentInputRef.current?.click()} aria-label="上传附件">
+                <button className="composer-attach-icon" type="button" disabled={saving} onClick={() => attachmentInputRef.current?.click()} aria-label={text("上传附件", "Upload attachments")}>
                   <LinearIcon name="attachment" />{attachments.length > 0 && <span>{attachments.length}</span>}
                 </button>
                 <input ref={attachmentInputRef} type="file" multiple hidden onChange={(event) => { if (event.currentTarget.files) addAttachments(event.currentTarget.files); event.currentTarget.value = ""; }} />
@@ -619,7 +874,22 @@ export function TaskEditor({
             )}
             {task && <span aria-hidden="true" />}
             <div className="dialog-actions">
-              {task && <span className="dialog-updated">编辑 {task.identifier}</span>}
+              {task && <span className="dialog-updated">{text(`编辑 ${task.identifier}`, `Editing ${task.identifier}`)}</span>}
+              {!task && (
+                <div className="create-more-control">
+                  <span>{text("创建更多", "Create more")}</span>
+                  <button
+                    type="button"
+                    className={`board-setting-switch${createMore ? " is-on" : ""}`}
+                    role="switch"
+                    aria-checked={createMore}
+                    disabled={saving}
+                    onClick={() => setCreateMore((current) => !current)}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                </div>
+              )}
               <button
                 className="button primary"
                 type="submit"
@@ -628,7 +898,11 @@ export function TaskEditor({
                   if (!task) createSubmitIntentRef.current = true;
                 }}
               >
-                {saving ? "正在保存…" : task ? "保存更改" : "创建议题"}
+                {saving
+                  ? text("正在保存…", "Saving…")
+                  : task
+                    ? text("保存更改", "Save changes")
+                    : text("创建议题", "Create issue")}
               </button>
             </div>
           </footer>

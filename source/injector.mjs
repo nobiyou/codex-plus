@@ -1424,6 +1424,9 @@ async function applyTaskboardAutomationPolicy(
         ? items.find((item) => item.id === request.automationId)
         : null
     ) ?? items[0];
+    if (!request.targetThreadId && currentItem?.targetThreadId) {
+      request = { ...request, targetThreadId: currentItem.targetThreadId };
+    }
   }
 
   const gateDecision = taskboardAutomationGateDecision({
@@ -1550,9 +1553,12 @@ function storedTaskboardAutomationPolicy(request, record = null) {
   return {
     taskboardProjectId: request.taskboardProjectId,
     codexProjectId: request.codexProjectId,
+    codexProjectKind: request.codexProjectKind,
+    codexHostId: request.codexHostId,
     projectName: request.projectName,
     workspacePath: request.workspacePath,
     skillPath: request.skillPath,
+    ...(request.targetThreadId ? { targetThreadId: request.targetThreadId } : {}),
     ...(request.automationId ? { automationId: request.automationId } : {}),
     enabledByUser: request.enabledByUser,
     quotaAware: request.quotaAware,
@@ -1701,6 +1707,12 @@ function enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit = fals
       if (result.item?.id) {
         current.request = { ...current.request, automationId: result.item.id };
       }
+      if (!current.request.targetThreadId && result.item?.targetThreadId) {
+        current.request = {
+          ...current.request,
+          targetThreadId: result.item.targetThreadId,
+        };
+      }
       if (current.request.quotaAware && result.quota) current.quota = result.quota;
       else delete current.quota;
       if (Object.prototype.hasOwnProperty.call(result, "automationGate")) {
@@ -1735,7 +1747,15 @@ async function updateAndApplyTaskboardAutomationPolicy(request, rpc) {
   taskboardAutomationPolicyRecords.set(request.taskboardProjectId, record);
   try {
     await persistTaskboardAutomationPolicies();
-    return await enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit: true });
+    const result = await enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit: true });
+    const current = taskboardAutomationPolicyRecords.get(request.taskboardProjectId);
+    if (!current) return result;
+    return {
+      ...result,
+      policy: storedTaskboardAutomationPolicy(current.request),
+      ...(current.quota ? { quota: current.quota } : {}),
+      ...(current.automationIssue ? { automationIssue: current.automationIssue } : {}),
+    };
   } catch (error) {
     if (taskboardAutomationPolicyRecords.get(request.taskboardProjectId)?.version === record.version) {
       if (previous) taskboardAutomationPolicyRecords.set(request.taskboardProjectId, previous);
@@ -1781,11 +1801,17 @@ async function readTaskboardAutomationBoardState(request) {
     const apiUrl = new URL("api/tasks", pageUrl);
     apiUrl.searchParams.set("projectId", request.taskboardProjectId);
     apiUrl.searchParams.set("archived", "false");
+    const challenge = randomBytes(32).toString("hex");
     const response = await fetch(apiUrl, {
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        origin: "app://-",
+        "x-codex-taskboard-challenge": challenge,
+      },
       signal: AbortSignal.timeout(1_500),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    verifyTaskboardProof(challenge, response.headers.get("x-codex-taskboard-proof"));
     const payload = await response.json();
     return {
       state: taskboardAutomationBoardState(payload?.tasks),
@@ -2272,7 +2298,7 @@ async function buildTaskboardInlineDocument({ pageUrl, frameCapability, frameCha
   let stylesheetSource = String(stylesheet.body || "");
   const assetNames = new Set();
   for (const source of [scriptSource, stylesheetSource]) {
-    for (const match of source.matchAll(/\b([A-Za-z0-9][A-Za-z0-9._-]*\.(?:png|svg|woff2))\b/g)) {
+    for (const match of source.matchAll(/(?<=["'\x60\/(])([A-Za-z0-9_-]+\.(?:png|svg|woff2))\b/g)) {
       if (isExternalTaskboardAssetReference(source, match.index ?? 0)) continue;
       assetNames.add(match[1]);
     }
@@ -2290,6 +2316,7 @@ async function buildTaskboardInlineDocument({ pageUrl, frameCapability, frameCha
     scriptSource = scriptSource.replaceAll(assetName, dataUri);
     stylesheetSource = stylesheetSource.replaceAll(assetName, dataUri);
   }
+  scriptSource = rewriteTaskboardModuleAssetReferences(scriptSource);
   stylesheetSource = stylesheetSource.replaceAll(
     /url\(https:\/\/fonts\.gstatic\.com\/[^)]+\)/g,
     "url(data:font/woff2;base64,)",
@@ -2304,6 +2331,13 @@ function isExternalTaskboardAssetReference(source, index) {
   const prefix = String(source).slice(0, index);
   const boundary = Math.max(prefix.lastIndexOf("\""), prefix.lastIndexOf("'"), prefix.lastIndexOf("`"));
   return /^https?:\/\/[^\s"'`()]*$/i.test(prefix.slice(boundary + 1));
+}
+
+function rewriteTaskboardModuleAssetReferences(source) {
+  return String(source).replaceAll(
+    /(["'\x60])\.\/(?!assets\/)([A-Za-z0-9][A-Za-z0-9._-]*\.js)\1/g,
+    "$1./assets/$2$1",
+  );
 }
 
 function buildTaskboardInlineBootstrapSource({ frameCapability, frameChallenge }) {
@@ -2348,7 +2382,7 @@ function buildTaskboardInlineBootstrapSource({ frameCapability, frameChallenge }
           ? input.href
           : input?.url;
       const url = new URL(rawUrl, document.baseURI);
-      return url.pathname.includes("/api/");
+      return url.pathname.endsWith("/api") || url.pathname.includes("/api/");
     } catch (_) {
       return false;
     }
@@ -3073,6 +3107,7 @@ function buildInjectionSource(css) {
     const HOME_PANEL_ATTRIBUTE = "data-codex-pokedex-home-panel";
     const MAIN_SURFACE_ATTRIBUTE = "data-codex-pokedex-main-surface";
     const HEADER_ATTRIBUTE = "data-codex-pokedex-header";
+    const COMPOSER_ATTRIBUTE = "data-codex-pokedex-composer";
     const TASK_RUNNING_ATTRIBUTE = "data-codex-pokedex-task-running";
     const FLAT_PICKER_ATTRIBUTE = "data-codex-pokedex-flat-picker";
     const FLAT_PICKER_SURFACE_ATTRIBUTE = "data-codex-pokedex-flat-picker-surface";
@@ -3125,6 +3160,13 @@ function buildInjectionSource(css) {
     document.querySelector(".codex-plus-pro-confirm-backdrop")?.remove();
     for (const element of document.querySelectorAll(".codex-pokedex-flat-picker")) {
       element.remove();
+    }
+    for (const element of document.querySelectorAll("[" + COMPOSER_ATTRIBUTE + "]")) {
+      element.removeAttribute(COMPOSER_ATTRIBUTE);
+      element.classList.remove("composer-surface-chrome");
+      element.style.removeProperty("border-width");
+      element.style.removeProperty("border-style");
+      element.style.removeProperty("border-color");
     }
     const SETTINGS_ICON = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>';
     const DEFAULT_MODEL_OPTIONS = ["5.6 Sol", "5.6 Terra", "5.6 Luna", "5.5", "5.3 Codex Spark"];
@@ -4825,6 +4867,11 @@ function buildInjectionSource(css) {
       // Prefer cloning the live voice/mic button look when available.
       if (voiceButton instanceof HTMLElement) {
         const voiceStyle = getComputedStyle(voiceButton);
+        const voiceHasVisibleSurface =
+          voiceStyle.backgroundImage !== "none" &&
+          voiceStyle.backgroundImage !== "initial" ||
+          (voiceStyle.backgroundColor !== "transparent" &&
+            voiceStyle.backgroundColor !== "rgba(0, 0, 0, 0)");
         const copyKeys = [
           "background",
           "background-color",
@@ -4840,36 +4887,40 @@ function buildInjectionSource(css) {
           "outline",
           "filter",
         ];
-        for (const key of copyKeys) {
-          const value = voiceStyle.getPropertyValue(key);
-          if (value) actionButton.style.setProperty(key, value, "important");
-        }
-        actionButton.style.setProperty("animation", "none", "important");
-        for (const svg of actionButton.querySelectorAll("svg, path, rect, circle, line, polyline, polygon")) {
-          const voiceSvg = voiceButton.querySelector("svg");
-          const voiceColor = voiceSvg ? getComputedStyle(voiceSvg).color : voiceStyle.color;
-          if (voiceColor) {
-            svg.style.setProperty("color", voiceColor, "important");
-            svg.style.setProperty("stroke", voiceColor, "important");
-            svg.style.setProperty("fill", "currentColor", "important");
-            svg.style.setProperty("opacity", "1", "important");
+        if (voiceHasVisibleSurface) {
+          for (const key of copyKeys) {
+            const value = voiceStyle.getPropertyValue(key);
+            if (value) actionButton.style.setProperty(key, value, "important");
           }
+          actionButton.style.setProperty("animation", "none", "important");
+          for (const svg of actionButton.querySelectorAll("svg, path, rect, circle, line, polyline, polygon")) {
+            const voiceSvg = voiceButton.querySelector("svg");
+            const voiceColor = voiceSvg ? getComputedStyle(voiceSvg).color : voiceStyle.color;
+            if (voiceColor) {
+              svg.style.setProperty("color", voiceColor, "important");
+              svg.style.setProperty("stroke", voiceColor, "important");
+              svg.style.setProperty("fill", "currentColor", "important");
+              svg.style.setProperty("opacity", "1", "important");
+            }
+          }
+          actionButton.setAttribute("data-codex-plus-composer-action-styled", "voice-match");
+          return;
         }
-        actionButton.setAttribute("data-codex-plus-composer-action-styled", "voice-match");
-        return;
       }
 
       // Fallback ghost chip if voice button is not present yet.
       if (isDark) {
         actionButton.style.setProperty("color", "rgb(236 242 250 / 0.92)", "important");
         actionButton.style.setProperty("border", "1px solid color-mix(in srgb, " + accent + " 22%, transparent)", "important");
-        actionButton.style.setProperty("background", "color-mix(in srgb, " + accent + " 12%, rgb(28 30 40 / 0.78))", "important");
+        actionButton.style.removeProperty("background");
+        actionButton.style.setProperty("background-color", "color-mix(in srgb, " + accent + " 12%, rgb(28 30 40 / 0.78))", "important");
         actionButton.style.setProperty("background-image", "none", "important");
         actionButton.style.setProperty("box-shadow", "0 1px 3px rgb(0 0 0 / 0.22)", "important");
       } else {
         actionButton.style.setProperty("color", "color-mix(in srgb, " + accentDark + " 78%, #1a1210)", "important");
         actionButton.style.setProperty("border", "1px solid color-mix(in srgb, " + accent + " 18%, transparent)", "important");
-        actionButton.style.setProperty("background", "color-mix(in srgb, " + accent + " 7%, rgb(255 255 255 / 0.9))", "important");
+        actionButton.style.removeProperty("background");
+        actionButton.style.setProperty("background-color", "color-mix(in srgb, " + accent + " 7%, rgb(255 255 255 / 0.9))", "important");
         actionButton.style.setProperty("background-image", "none", "important");
         actionButton.style.setProperty(
           "box-shadow",
@@ -5454,6 +5505,51 @@ function buildInjectionSource(css) {
         header.setAttribute(HEADER_ATTRIBUTE, "on");
         header.classList.add("app-header-tint");
       }
+
+      const composerRoots = new Set();
+      for (const node of document.querySelectorAll(
+        '[data-composer-radius-variant], [class*="ComposerLayoutRoot"]',
+      )) {
+        const composer = node.closest?.(
+          '[data-composer-radius-variant], [class*="ComposerLayoutRoot"]',
+        ) || node;
+        if (
+          composer instanceof HTMLElement &&
+          !composer.closest('[data-codex-pokedex-avatar-overlay="on"]') &&
+          !isHotkeyWindow
+        ) {
+          composerRoots.add(composer);
+        }
+      }
+      for (const current of document.querySelectorAll("[" + COMPOSER_ATTRIBUTE + "]")) {
+        if (!composerRoots.has(current)) {
+          current.removeAttribute(COMPOSER_ATTRIBUTE);
+          current.classList.remove("composer-surface-chrome");
+          current.style.removeProperty("border-width");
+          current.style.removeProperty("border-style");
+          current.style.removeProperty("border-color");
+        }
+      }
+      for (const composer of composerRoots) {
+        composer.setAttribute(COMPOSER_ATTRIBUTE, "on");
+        composer.classList.add("composer-surface-chrome");
+        if (featureSettings.theme) {
+          // The current utility layer keeps border-width:0!important on the
+          // native root. These are the only shell properties that need a
+          // lifecycle-scoped inline compatibility override.
+          composer.style.setProperty("border-width", "1.5px", "important");
+          composer.style.setProperty("border-style", "solid", "important");
+          composer.style.setProperty(
+            "border-color",
+            "color-mix(in srgb, var(--codex-plus-accent, #b61f31) 48%, transparent)",
+            "important",
+          );
+        } else {
+          composer.style.removeProperty("border-width");
+          composer.style.removeProperty("border-style");
+          composer.style.removeProperty("border-color");
+        }
+      }
       return surface;
     };
 
@@ -5620,7 +5716,16 @@ function buildInjectionSource(css) {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: [THEME_ATTRIBUTE, OVERLAY_ATTRIBUTE, ...Object.values(FEATURE_ATTRIBUTES)],
+      attributeFilter: [
+        THEME_ATTRIBUTE,
+        OVERLAY_ATTRIBUTE,
+        COMPOSER_ATTRIBUTE,
+        "class",
+        "data-composer-layout",
+        "data-composer-radius-variant",
+        "data-composer-surface-variant",
+        ...Object.values(FEATURE_ATTRIBUTES),
+      ],
     });
     if (isAvatarOverlay) postChannelMessage(activityChannel, { type: "task-state-request" });
     const cleanupRuntime = () => {
@@ -5637,6 +5742,13 @@ function buildInjectionSource(css) {
       document.querySelector(".codex-plus-pro-settings-backdrop")?.remove();
       for (const element of document.querySelectorAll(".codex-pokedex-flat-picker")) {
         element.remove();
+      }
+      for (const element of document.querySelectorAll("[" + COMPOSER_ATTRIBUTE + "]")) {
+        element.removeAttribute(COMPOSER_ATTRIBUTE);
+        element.classList.remove("composer-surface-chrome");
+        element.style.removeProperty("border-width");
+        element.style.removeProperty("border-style");
+        element.style.removeProperty("border-color");
       }
       if (window.__codexPokedexActivityChannel === activityChannel) window.__codexPokedexActivityChannel = null;
       if (window.__codexPlusProSettingsChannel === settingsChannel) window.__codexPlusProSettingsChannel = null;

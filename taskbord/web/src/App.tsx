@@ -22,12 +22,19 @@ import {
   ApiError,
   addTaskRelation,
   archiveTask as archiveTaskRequest,
+  createProjectLabel as createProjectLabelRequest,
   createProject as createProjectRequest,
+  createComment,
   createTask as createTaskRequest,
+  configureJiraConnection,
   deleteArchivedTask as deleteArchivedTaskRequest,
+  deleteProjectLabel as deleteProjectLabelRequest,
   deleteProject as deleteProjectRequest,
+  getAiChatCatalog,
   getCodexThreadProgress,
   getHostRuntime,
+  getJiraConnection,
+  getTask,
   getTaskboardRevision,
   getWorkflowWorkspace,
   getTaskboardMetadata,
@@ -35,13 +42,16 @@ import {
   listDevelopmentContexts,
   listDeviceWorkspaces,
   listProjects,
+  listComments,
   listTasks,
   moveTask as moveTaskRequest,
   publishHostRuntime,
   removeTaskRelation,
   resolveTaskboardUrl,
   restoreTask as restoreTaskRequest,
+  setApiText,
   setCurrentUserActor,
+  syncJiraConnection,
   uploadAttachment,
   updateTask as updateTaskRequest,
 } from "./api";
@@ -51,9 +61,11 @@ import {
   assigneeTargetForActor,
 } from "./actors";
 import { BoardColumn } from "./components/BoardColumn";
-import { AiChat, type AiChatOpenThreadRequest } from "./components/AiChat";
+import type { AiChatOpenThreadRequest } from "./components/AiChat";
+import { BoardCardDisplayMenu } from "./components/BoardCardDisplayMenu";
 import { DashboardView } from "./components/DashboardView";
 import { IssueListView } from "./components/IssueListView";
+import { JiraConnectionDialog } from "./components/JiraConnectionDialog";
 import { OtherTasksPanel } from "./components/OtherTasksPanel";
 import {
   resolveInlineMediaMarkdown,
@@ -66,8 +78,8 @@ import { TaskContextMenu } from "./components/TaskContextMenu";
 import { TaskDetail } from "./components/TaskDetail";
 import {
   TaskEditor,
+  type NewTaskCreateOptions,
   type NewTaskEditorDraft,
-  type TaskEditorSaveDraft,
 } from "./components/TaskEditor";
 import { TaskFilterMenu } from "./components/TaskFilterMenu";
 import { taskboardStorage } from "./storage";
@@ -87,10 +99,8 @@ import {
   MAIN_STATUSES,
   type OtherTaskTab,
 } from "./issueBoardStatuses";
-import { DEFAULT_LABELS } from "./labels";
 import {
   normalizeCodexThreadId,
-  preferredTaskThreadId,
   taskCardPresentation,
   type TaskCardPresentation,
   type TaskConversationItem,
@@ -107,9 +117,13 @@ import {
   TASK_STATUSES,
   type ActorIdentity,
   type AiChatThread,
+  type CodexProjectIdentity,
+  type CodexThreadBinding,
   type DevelopmentScan,
   type HostContext,
+  type HostRecentConversation,
   type IssueRelationType,
+  type JiraConnection,
   type Project,
   type Task,
   type TaskboardMetadata,
@@ -133,9 +147,26 @@ type DetailSourceScroll =
   | { projectId: string; view: "issues"; status: TaskStatus; scrollTop: number }
   | { projectId: string; view: "list"; scrollTop: number };
 type GanttZoom = "day" | "week" | "month";
+type BoardCardDisplay = { cover: boolean; body: boolean };
+type ActionError = string | readonly [string, string];
+type ProjectLoadError = {
+  source: "projects";
+  operation: "initial" | "refresh";
+  requestId: number;
+  message: string;
+};
+type TasksLoadError = {
+  source: "tasks";
+  requestId: number;
+  message: string;
+};
+type LoadError = ProjectLoadError | TasksLoadError;
 const SHOW_WORKFLOW_BOARD_ENTRY = false;
 const GANTT_ZOOM_OPTIONS: GanttZoom[] = ["day", "week", "month"];
 
+const AiChat = lazy(() => import("./components/AiChat").then((module) => ({
+  default: module.AiChat,
+})));
 const WorkflowBoard = lazy(() => import("./components/WorkflowBoard").then((module) => ({
   default: module.WorkflowBoard,
 })));
@@ -160,6 +191,7 @@ interface ProjectChoice {
   issueCount: number;
   inCodex: boolean;
   persisted: boolean;
+  codexIdentity: CodexProjectIdentity | null;
 }
 
 interface ProjectContextMenuState {
@@ -170,13 +202,23 @@ interface ProjectContextMenuState {
 
 interface UndoOperation {
   id: number;
-  message: string;
   undo: () => Promise<void>;
 }
 
 interface UndoNotice {
   id: number;
   message: string;
+}
+
+interface PendingRemoteThreadClaim {
+  claimedTask: Task;
+  previousTask: Task;
+  identity: CodexProjectIdentity;
+}
+
+interface PendingCreatedThreadBinding {
+  task: Task;
+  identity: CodexProjectIdentity;
 }
 
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
@@ -190,20 +232,16 @@ interface AutomationQuotaStatus {
   reason?: "api-key";
 }
 
-interface AutomationIssue {
-  kind: "run-failed";
-  runAt: number;
-  message: string;
-}
-
 interface ProjectAutomationRecord {
   automationId?: string;
   codexProjectId: string;
+  codexProjectKind: "local" | "remote";
+  codexHostId: string;
+  workspacePath: string;
   status: ProjectAutomationStatus;
   enabledByUser: boolean;
   quotaAware: boolean;
   quota?: AutomationQuotaStatus;
-  automationIssue?: AutomationIssue | null;
   intervalMinutes: AutomationIntervalMinutes;
   model: AutomationModel;
   reasoningEffort: AutomationReasoningEffort;
@@ -217,8 +255,11 @@ type ProjectAutomationOptions = Pick<
 interface AutomationRequestContext {
   taskboardProjectId: string;
   codexProjectId: string;
+  codexProjectKind: "local" | "remote";
+  codexHostId: string;
   projectName: string;
   workspacePath: string;
+  remoteProjects: CodexProjectIdentity[];
   skillPath: string;
 }
 
@@ -236,7 +277,6 @@ interface AutomationHostItem {
   model: AutomationModel;
   reasoningEffort: AutomationReasoningEffort;
   rrule: string;
-  lastRunAt?: number | null;
 }
 
 interface AutomationHostResponse {
@@ -245,9 +285,12 @@ interface AutomationHostResponse {
   item?: AutomationHostItem;
   items?: AutomationHostItem[];
   quota?: AutomationQuotaStatus;
-  automationIssue?: AutomationIssue | null;
   policy?: {
     automationId?: string;
+    codexProjectId: string;
+    codexProjectKind: "local" | "remote";
+    codexHostId: string;
+    workspacePath: string;
     enabledByUser: boolean;
     quotaAware: boolean;
     intervalMinutes: AutomationIntervalMinutes;
@@ -274,7 +317,9 @@ const GLOBAL_PROJECT_ID = "local";
 const RECENT_PROJECT_IDS_KEY = "taskboard.recentProjectIds.v1";
 const PROJECT_VIEW_KEY_PREFIX = "taskboard.project-view.v1.";
 const DEVICE_WORKSPACE_PATHS_KEY = "taskboard.deviceWorkspacePaths.v1";
+const PROJECT_CODEX_IDENTITIES_KEY = "taskboard.projectCodexIdentities.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
+const BOARD_CARD_DISPLAY_KEY = "taskboard.board-card-display.v1";
 const ISSUE_READ_KEY_PREFIX = "taskboard.issue-read.v1";
 const FIRST_USE_COMPLETE_KEY = "taskboard.first-use-complete.v1";
 const DEFAULT_AUTOMATION_OPTIONS = {
@@ -304,6 +349,18 @@ function readProjectBoardView(projectId: string): BoardView {
     : "issues";
 }
 
+function readBoardCardDisplay(): BoardCardDisplay {
+  try {
+    const value = JSON.parse(taskboardStorage.getItem(BOARD_CARD_DISPLAY_KEY) ?? "{}");
+    return {
+      cover: value.cover !== false,
+      body: value.body === true,
+    };
+  } catch {
+    return { cover: true, body: false };
+  }
+}
+
 function readRecentProjectIds(): string[] {
   try {
     const value = JSON.parse(taskboardStorage.getItem(RECENT_PROJECT_IDS_KEY) ?? "[]");
@@ -329,6 +386,7 @@ const EVENT_NAMES = [
   "attachment.created",
   "attachment.deleted",
   "project.created",
+  "project.labels.updated",
   "workflow.updated",
 ] as const;
 
@@ -356,6 +414,25 @@ function readDeviceWorkspacePaths(): Record<string, string> {
   }
 }
 
+function readProjectCodexIdentities(): Record<string, CodexProjectIdentity> {
+  try {
+    const value = JSON.parse(taskboardStorage.getItem(PROJECT_CODEX_IDENTITIES_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, CodexProjectIdentity] => {
+      const identity = entry[1] as Partial<CodexProjectIdentity> | null;
+      return Boolean(
+        identity
+        && typeof identity.codexProjectId === "string"
+        && (identity.codexProjectKind === "local" || identity.codexProjectKind === "remote")
+        && typeof identity.codexHostId === "string"
+        && typeof identity.workspacePath === "string",
+      );
+    }));
+  } catch {
+    return {};
+  }
+}
+
 function readProjectAutomations(): ProjectAutomations {
   try {
     const value = JSON.parse(taskboardStorage.getItem(PROJECT_AUTOMATIONS_KEY) ?? "{}");
@@ -371,6 +448,9 @@ function readProjectAutomations(): ProjectAutomations {
       if (
         (candidate.automationId !== undefined && typeof candidate.automationId !== "string")
         || typeof candidate.codexProjectId !== "string"
+        || (candidate.codexProjectKind !== "local" && candidate.codexProjectKind !== "remote")
+        || typeof candidate.codexHostId !== "string"
+        || typeof candidate.workspacePath !== "string"
         || (candidate.status !== "ACTIVE" && candidate.status !== "PAUSED")
         || !isAutomationIntervalMinutes(candidate.intervalMinutes ?? 5)
         || !isAutomationModel(model)
@@ -381,17 +461,16 @@ function readProjectAutomations(): ProjectAutomations {
         || typeof quotaAware !== "boolean"
       ) continue;
       const quota = isAutomationQuotaStatus(candidate.quota) ? candidate.quota : undefined;
-      const automationIssue = isAutomationIssue(candidate.automationIssue)
-        ? candidate.automationIssue
-        : undefined;
       result[projectId] = {
         automationId: candidate.automationId,
         codexProjectId: candidate.codexProjectId,
+        codexProjectKind: candidate.codexProjectKind,
+        codexHostId: candidate.codexHostId,
+        workspacePath: candidate.workspacePath,
         status: candidate.status,
         enabledByUser,
         quotaAware,
         ...(quota ? { quota } : {}),
-        ...(automationIssue ? { automationIssue } : {}),
         intervalMinutes: candidate.intervalMinutes ?? 5,
         model,
         reasoningEffort,
@@ -401,15 +480,6 @@ function readProjectAutomations(): ProjectAutomations {
   } catch {
     return {};
   }
-}
-
-function isAutomationIssue(value: unknown): value is AutomationIssue {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const candidate = value as Partial<AutomationIssue>;
-  return candidate.kind === "run-failed"
-    && Number.isFinite(candidate.runAt)
-    && typeof candidate.message === "string"
-    && candidate.message.length > 0;
 }
 
 function isAutomationQuotaStatus(value: unknown): value is AutomationQuotaStatus {
@@ -432,6 +502,10 @@ function isAutomationHostPolicy(
   return Boolean(
     value
     && (value.automationId === undefined || typeof value.automationId === "string")
+    && typeof value.codexProjectId === "string"
+    && (value.codexProjectKind === "local" || value.codexProjectKind === "remote")
+    && typeof value.codexHostId === "string"
+    && typeof value.workspacePath === "string"
     && typeof value.enabledByUser === "boolean"
     && typeof value.quotaAware === "boolean"
     && isAutomationIntervalMinutes(value.intervalMinutes)
@@ -450,18 +524,6 @@ function intervalMinutesFromRrule(value: string): AutomationIntervalMinutes | nu
   return match ? Number(match[1]) as AutomationIntervalMinutes : null;
 }
 
-function workspaceName(path?: string): string | null {
-  if (!path) return null;
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? path;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  if (error instanceof Error) return error.message;
-  return "Something went wrong while loading your issues.";
-}
-
 function isAutomationHostItem(value: unknown): value is AutomationHostItem {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Partial<AutomationHostItem>;
@@ -473,7 +535,6 @@ function isAutomationHostItem(value: unknown): value is AutomationHostItem {
     && isSupportedModelEffort(item.model, item.reasoningEffort)
     && typeof item.rrule === "string"
     && intervalMinutesFromRrule(item.rrule) !== null
-    && (item.lastRunAt === undefined || item.lastRunAt === null || Number.isFinite(item.lastRunAt))
   );
 }
 
@@ -553,16 +614,25 @@ function LocalRealtimeSync({
 
     const handleEvent = (event: Event) => {
       const message = event as MessageEvent<string>;
-      let payload: { projectId?: string; taskId?: string } = {};
+      let payload: { projectId?: string; taskId?: string; project?: Project } = {};
       try {
-        payload = JSON.parse(message.data) as { projectId?: string; taskId?: string };
+        payload = JSON.parse(message.data) as {
+          projectId?: string;
+          taskId?: string;
+          project?: Project;
+        };
       } catch {
         // A malformed event should not interrupt later updates.
       }
+      const eventProjectId = payload.projectId ?? payload.project?.id;
       const affectsSelectedProject = Boolean(selectedProjectId)
-        && (!payload.projectId || payload.projectId === selectedProjectId);
+        && (!eventProjectId || eventProjectId === selectedProjectId);
       if (event.type === "project.created") {
         scheduleRefresh({ projects: true });
+        return;
+      }
+      if (event.type === "project.labels.updated") {
+        scheduleRefresh({ projects: true, tasks: affectsSelectedProject });
         return;
       }
       if (event.type.startsWith("task.")) {
@@ -637,6 +707,7 @@ export function App() {
   const [manageTaskboardSkillPath, setManageTaskboardSkillPath] = useState("");
   const [taskboardMetadata, setTaskboardMetadata] = useState<TaskboardMetadata | null>(null);
   const [localAiChatAvailable, setLocalAiChatAvailable] = useState(false);
+  const [aiImportReadyProjectId, setAiImportReadyProjectId] = useState<string | null>(null);
   const [aiThreads, setAiThreads] = useState<AiChatThread[]>([]);
   const [aiOpenThreadRequest, setAiOpenThreadRequest] = useState<AiChatOpenThreadRequest | null>(null);
   const [readActivityKeys, setReadActivityKeys] = useState<Record<string, string>>({});
@@ -656,12 +727,20 @@ export function App() {
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [hasLoadedTasks, setHasLoadedTasks] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [projectLoadError, setProjectLoadError] = useState<ProjectLoadError | null>(null);
+  const [tasksLoadError, setTasksLoadError] = useState<TasksLoadError | null>(null);
+  const loadError: LoadError | null = projectLoadError ?? tasksLoadError;
+  const [actionError, setActionError] = useState<ActionError | null>(null);
+  const actionErrorText = actionError === null
+    ? null
+    : typeof actionError === "string"
+      ? actionError
+      : text(actionError[0], actionError[1]);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState(readTaskFilters);
   const [boardView, setBoardView] = useState<BoardView>(() => readProjectBoardView(initialProjectId));
+  const [boardCardDisplay, setBoardCardDisplay] = useState<BoardCardDisplay>(readBoardCardDisplay);
   const [dashboardSummaryAnimatedProjectId, setDashboardSummaryAnimatedProjectId] = useState<string | null>(null);
   const [ganttZoom, setGanttZoom] = useState<GanttZoom>("week");
   const [ganttHideCompleted, setGanttHideCompleted] = useState(false);
@@ -675,7 +754,10 @@ export function App() {
   const [pendingArchivedTaskDelete, setPendingArchivedTaskDelete] = useState<Task | null>(null);
   const [deletingArchivedTaskId, setDeletingArchivedTaskId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
-  const [newTaskDraft, setNewTaskDraft] = useState<NewTaskEditorDraft | null>(null);
+  const [newTaskDraft, setNewTaskDraft] = useState<{
+    projectId: string;
+    draft: NewTaskEditorDraft;
+  } | null>(null);
   const [detailTaskIdentifier, setDetailTaskIdentifier] = useState<string | null>(
     () => readIssueIdentifier(window.location.search),
   );
@@ -697,15 +779,22 @@ export function App() {
   const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null);
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
+  const [jiraDialogOpen, setJiraDialogOpen] = useState(false);
+  const [jiraConnection, setJiraConnection] = useState<JiraConnection | null>(null);
+  const [jiraSaving, setJiraSaving] = useState(false);
+  const [jiraSyncing, setJiraSyncing] = useState(false);
+  const [jiraError, setJiraError] = useState<string | null>(null);
   const [pendingProjectDelete, setPendingProjectDelete] = useState<ProjectChoice | null>(null);
   const [projectDeleteIssueCount, setProjectDeleteIssueCount] = useState<number | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [deviceWorkspacePaths, setDeviceWorkspacePaths] = useState(readDeviceWorkspacePaths);
+  const [projectCodexIdentities, setProjectCodexIdentities] = useState(readProjectCodexIdentities);
   const [projectAutomations, setProjectAutomations] = useState(readProjectAutomations);
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const [announcement, setAnnouncementValue] = useState("");
   const [undoNotice, setUndoNotice] = useState<UndoNotice | null>(null);
+  const projectsRequestRef = useRef(0);
   const tasksRequestRef = useRef(0);
   const tasksRef = useRef<Task[]>([]);
   const undoSequenceRef = useRef(0);
@@ -721,10 +810,22 @@ export function App() {
   const revisionPollingInterval = getRevisionPollingInterval(taskboardMetadata);
   const textRef = useRef(text);
   textRef.current = text;
+  setApiText(text);
+  function errorMessage(error: unknown): string {
+    if (error instanceof ApiError) return error.message;
+    if (error instanceof Error) return error.message;
+    return textRef.current(
+      "加载议题时出现问题。",
+      "Something went wrong while loading your issues.",
+    );
+  }
   const pendingAutomationRequestsRef = useRef(new Map<string, PendingAutomationRequest>());
+  const pendingRemoteThreadClaimsRef = useRef(new Map<string, PendingRemoteThreadClaim>());
+  const pendingCreatedThreadBindingsRef = useRef(new Map<string, PendingCreatedThreadBinding>());
   const automationRequestInFlightRef = useRef<"list" | "save" | null>(null);
   const loadedAutomationProjectIdsRef = useRef(new Set<string>());
   const queuedAutomationSavesRef = useRef(new Map<string, QueuedProjectAutomationSave>());
+  const automationSaveRevisionRef = useRef(0);
   const projectAutomationsRef = useRef(projectAutomations);
 
   useEffect(() => {
@@ -765,6 +866,26 @@ export function App() {
   }, []);
 
   const selectedProject = projects.find((project) => project.id === selectedProjectId) ?? null;
+  const isJiraProject = selectedProject?.source === "jira";
+  const aiImportProjectId = hasLoadedTasks
+    && tasks.length === 0
+    && selectedProject
+    && selectedProject.id !== GLOBAL_PROJECT_ID
+    && !isJiraProject
+    && localAiChatAvailable
+      ? selectedProject.id
+      : null;
+  useEffect(() => {
+    setAiImportReadyProjectId(null);
+    if (!aiImportProjectId) return;
+    const controller = new AbortController();
+    void getAiChatCatalog(aiImportProjectId, controller.signal)
+      .then(() => {
+        if (!controller.signal.aborted) setAiImportReadyProjectId(aiImportProjectId);
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [aiImportProjectId, selectedProject]);
   useLayoutEffect(() => {
     if (selectedProject) rememberProjectOpen(selectedProject.id);
   }, [rememberProjectOpen, selectedProject]);
@@ -776,7 +897,9 @@ export function App() {
     ? undefined
     : deviceWorkspacePaths[selectedProjectId];
   const selectedProjectAutomation = projectAutomations[selectedProjectId];
-  const automationProjectContext = useMemo(() => {
+  const automationProjectContext = useMemo<Partial<CodexProjectIdentity> & {
+    unavailableReason: string | null;
+  }>(() => {
     if (!embedded || window.parent === window) {
       return { unavailableReason: text("仅可在 Codex App 中使用", "Available only in the Codex app") };
     }
@@ -787,20 +910,53 @@ export function App() {
       return { unavailableReason: text("请先选择项目", "Select a project first") };
     }
 
-    const directCodexProject = hostContext?.projects?.some(
-      (project) => project.id === selectedProject.id,
+    const savedIdentity = projectCodexIdentities[selectedProject.id];
+    if (savedIdentity?.codexProjectKind === "remote") {
+      const liveProject = hostContext?.projects?.find(
+        (project) => project.id === savedIdentity.codexProjectId,
+      );
+      if (
+        liveProject?.projectKind !== "remote"
+        || liveProject.hostId !== savedIdentity.codexHostId
+        || liveProject.workspacePath !== savedIdentity.workspacePath
+      ) {
+        return { unavailableReason: text(
+          "已保存的 SSH 远程项目或主机当前不可用",
+          "The saved SSH remote project or host is not available",
+        ) };
+      }
+      if (!manageTaskboardSkillPath) {
+        return { unavailableReason: text(
+          "任务面板还没有读取到 Skill 路径",
+          "Taskboard has not received the Skill path",
+        ) };
+      }
+      return { ...savedIdentity, unavailableReason: null };
+    }
+
+    const effectiveCodexProjectId = selectedProject.id === GLOBAL_PROJECT_ID
+      ? hostContext?.projectId
+      : selectedProject.id;
+    const directCodexProject = hostContext?.projects?.find(
+      (project) => project.id === effectiveCodexProjectId,
     );
-    const workspacePath = deviceWorkspacePaths[selectedProject.id]
+    const workspacePath = (
+      directCodexProject?.projectKind === "remote"
+        ? directCodexProject.workspacePath
+        : undefined
+    )
+      ?? deviceWorkspacePaths[selectedProject.id]
       ?? selectedProject.workspacePath
+      ?? directCodexProject?.workspacePath
       ?? (
-        directCodexProject && hostContext?.projectId === selectedProject.id
-          ? hostContext.workspacePath
+        directCodexProject && hostContext?.projectId === effectiveCodexProjectId
+          ? hostContext?.workspacePath
           : undefined
       );
     const codexProjectId = directCodexProject
-      ? selectedProject.id
+      ? directCodexProject.id
       : hostContext?.projects?.find(
-        (project) => deviceWorkspacePaths[project.id] === workspacePath,
+        (project) => (deviceWorkspacePaths[project.id] ?? project.workspacePath) === workspacePath,
       )?.id;
 
     if (!workspacePath || !codexProjectId) {
@@ -815,12 +971,20 @@ export function App() {
         "Taskboard has not received the Skill path",
       ) };
     }
-    return { workspacePath, codexProjectId, unavailableReason: null };
+    const codexProject = hostContext?.projects?.find((project) => project.id === codexProjectId);
+    return {
+      workspacePath,
+      codexProjectId,
+      codexProjectKind: codexProject?.projectKind ?? "local",
+      codexHostId: codexProject?.hostId ?? "local",
+      unavailableReason: null,
+    };
   }, [
     deviceWorkspacePaths,
     embedded,
     hostContext,
     manageTaskboardSkillPath,
+    projectCodexIdentities,
     selectedProject,
     text,
   ]);
@@ -828,31 +992,75 @@ export function App() {
     if (
       !selectedProject
       || !automationProjectContext.codexProjectId
+      || !automationProjectContext.codexProjectKind
+      || !automationProjectContext.codexHostId
       || !automationProjectContext.workspacePath
       || !manageTaskboardSkillPath
     ) return null;
     return {
       taskboardProjectId: selectedProject.id,
       codexProjectId: automationProjectContext.codexProjectId,
+      codexProjectKind: automationProjectContext.codexProjectKind,
+      codexHostId: automationProjectContext.codexHostId,
       projectName: selectedProject.name,
       workspacePath: automationProjectContext.workspacePath,
+      remoteProjects: automationProjectContext.codexProjectKind === "remote"
+        ? (hostContext?.projects ?? [])
+            .filter((project) => (
+              project.projectKind === "remote"
+              && project.hostId === automationProjectContext.codexHostId
+              && typeof project.workspacePath === "string"
+            ))
+            .map((project) => ({
+              codexProjectId: project.id,
+              codexProjectKind: "remote" as const,
+              codexHostId: project.hostId!,
+              workspacePath: project.workspacePath!,
+            }))
+            .sort((left, right) => (
+              left.workspacePath.localeCompare(right.workspacePath)
+              || left.codexProjectId.localeCompare(right.codexProjectId)
+            ))
+        : [],
       skillPath: manageTaskboardSkillPath,
     };
-  }, [automationProjectContext, manageTaskboardSkillPath, selectedProject]);
+  }, [automationProjectContext, hostContext, manageTaskboardSkillPath, selectedProject]);
+  const referenceTasks = useMemo(() => [...tasks, ...archivedTasks], [archivedTasks, tasks]);
   const detailTask = detailTaskIdentifier
-    ? tasks.find((task) => task.identifier === detailTaskIdentifier) ?? null
+    ? referenceTasks.find((task) => task.identifier === detailTaskIdentifier) ?? null
     : null;
   const detailTaskId = detailTask?.id ?? null;
+  const detailBaseCodexIdentity = detailTask
+    ? codexProjectContextForTaskProject(detailTask.projectId)
+    : null;
+  const detailCodexIdentity = detailTask?.developmentContext?.type === "worktree"
+    && detailBaseCodexIdentity
+    ? remoteIdentityForTask(detailTask, detailBaseCodexIdentity)
+    : detailBaseCodexIdentity;
+  const detailRecentConversations = detailCodexIdentity
+    ? (hostContext?.recentConversations ?? []).filter((conversation) => (
+        conversation.projectId === detailCodexIdentity.codexProjectId
+      ))
+    : [];
+  const createCodexIdentity = selectedProjectId
+    ? codexProjectContextForTaskProject(selectedProjectId)
+    : null;
+  const createRecentConversations = createCodexIdentity
+    ? (hostContext?.recentConversations ?? []).filter((conversation) => (
+        conversation.projectId === createCodexIdentity.codexProjectId
+      ))
+    : [];
+  useEffect(() => {
+    if (!embedded || window.parent === window) return;
+    postEmbeddedHostMessage({
+      type: "taskboard:request-project-context",
+      payload: { projectId: createCodexIdentity?.codexProjectId ?? "" },
+    });
+  }, [createCodexIdentity?.codexProjectId, embedded, embeddedFrameChallenge, selectedProjectId]);
   const contextMenuTask = contextMenu
     ? tasks.find((task) => task.id === contextMenu.taskId) ?? null
     : null;
-  const availableLabels = useMemo(
-    () => [...new Set([
-      ...DEFAULT_LABELS.map((label) => label.name),
-      ...tasks.flatMap((task) => task.labels),
-    ])],
-    [tasks],
-  );
+  const availableLabels = selectedProject?.labels ?? [];
   const projectChoices = useMemo<ProjectChoice[]>(() => {
     const persistedById = new Map(projects.map((project) => [project.id, project]));
     const seen = new Set<string>();
@@ -868,6 +1076,14 @@ export function App() {
         issueCount: persistedById.get(project.id)?.issueCount ?? 0,
         inCodex: true,
         persisted: persistedById.has(project.id),
+        codexIdentity: project.workspacePath && project.projectKind && project.hostId
+          ? {
+              codexProjectId: project.id,
+              codexProjectKind: project.projectKind,
+              codexHostId: project.hostId,
+              workspacePath: project.workspacePath,
+            }
+          : null,
       });
     }
     for (const project of projects) {
@@ -878,6 +1094,7 @@ export function App() {
         issueCount: project.issueCount,
         inCodex: false,
         persisted: true,
+        codexIdentity: projectCodexIdentities[project.id] ?? null,
       });
     }
     const recentOrder = new Map(recentProjectIds.map((projectId, index) => [projectId, index]));
@@ -885,7 +1102,7 @@ export function App() {
       (recentOrder.get(left.id) ?? recentProjectIds.length)
       - (recentOrder.get(right.id) ?? recentProjectIds.length)
     ));
-  }, [hostContext?.projects, projects, recentProjectIds, text]);
+  }, [hostContext?.projects, projectCodexIdentities, projects, recentProjectIds, text]);
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
   const issueReadStorageKey = selectedProjectId
     ? `${ISSUE_READ_KEY_PREFIX}:${taskboardMetadata?.mode ?? "local"}:${selectedProjectId}`
@@ -944,11 +1161,13 @@ export function App() {
         record
         && current[projectId]?.automationId === record.automationId
         && current[projectId]?.codexProjectId === record.codexProjectId
+        && current[projectId]?.codexProjectKind === record.codexProjectKind
+        && current[projectId]?.codexHostId === record.codexHostId
+        && current[projectId]?.workspacePath === record.workspacePath
         && current[projectId]?.status === record.status
         && current[projectId]?.enabledByUser === record.enabledByUser
         && current[projectId]?.quotaAware === record.quotaAware
         && JSON.stringify(current[projectId]?.quota) === JSON.stringify(record.quota)
-        && JSON.stringify(current[projectId]?.automationIssue) === JSON.stringify(record.automationIssue)
         && current[projectId]?.intervalMinutes === record.intervalMinutes
         && current[projectId]?.model === record.model
         && current[projectId]?.reasoningEffort === record.reasoningEffort
@@ -988,8 +1207,11 @@ export function App() {
         operation,
         taskboardProjectId: context.taskboardProjectId,
         codexProjectId: context.codexProjectId,
+        codexProjectKind: context.codexProjectKind,
+        codexHostId: context.codexHostId,
         projectName: context.projectName,
         workspacePath: context.workspacePath,
+        remoteProjects: context.remoteProjects,
         skillPath: context.skillPath,
         ...(automationId ? { automationId } : {}),
         enabledByUser: options.enabledByUser,
@@ -1024,17 +1246,26 @@ export function App() {
           previousRecord?.automationId,
         );
         const item = isAutomationHostItem(response.item) ? response.item : undefined;
+        const policy = isAutomationHostPolicy(response.policy) ? response.policy : null;
+        if (!policy) {
+          throw new Error(textRef.current(
+            "Codex 没有返回实际生效的自动化策略",
+            "Codex did not return the effective automation policy.",
+          ));
+        }
         writeProjectAutomation(queuedSave.projectId, {
-          automationId: item?.id,
-          codexProjectId: queuedSave.context.codexProjectId,
+          automationId: item?.id ?? policy.automationId,
+          codexProjectId: policy.codexProjectId,
+          codexProjectKind: policy.codexProjectKind,
+          codexHostId: policy.codexHostId,
+          workspacePath: policy.workspacePath,
           status: item?.status ?? "PAUSED",
-          enabledByUser: queuedSave.options.enabledByUser,
-          quotaAware: queuedSave.options.quotaAware,
+          enabledByUser: policy.enabledByUser,
+          quotaAware: policy.quotaAware,
           ...(response.quota ? { quota: response.quota } : {}),
-          ...(response.automationIssue ? { automationIssue: response.automationIssue } : {}),
-          intervalMinutes: queuedSave.options.intervalMinutes,
-          model: queuedSave.options.model,
-          reasoningEffort: queuedSave.options.reasoningEffort,
+          intervalMinutes: policy.intervalMinutes,
+          model: policy.model,
+          reasoningEffort: policy.reasoningEffort,
         });
       } catch (error) {
         writeProjectAutomation(queuedSave.projectId, previousRecord);
@@ -1055,6 +1286,7 @@ export function App() {
     }
     if (automationRequestInFlightRef.current) return;
     const projectId = automationRequestContext.taskboardProjectId;
+    const saveRevision = automationSaveRevisionRef.current;
     const stored = projectAutomationsRef.current[projectId];
     const initialLoad = !loadedAutomationProjectIdsRef.current.has(projectId);
     automationRequestInFlightRef.current = "list";
@@ -1071,15 +1303,15 @@ export function App() {
         automationRequestContext,
         stored?.automationId,
       );
+      if (
+        saveRevision !== automationSaveRevisionRef.current
+        || queuedAutomationSavesRef.current.has(projectId)
+      ) return;
       const items = Array.isArray(response.items)
         ? response.items.filter(isAutomationHostItem)
         : [];
       const policy = isAutomationHostPolicy(response.policy) ? response.policy : null;
-      const responseIssue = response.automationIssue === null
-        ? undefined
-        : isAutomationIssue(response.automationIssue)
-          ? response.automationIssue
-          : stored?.automationIssue;
+      const effectiveProjectIdentity = policy ?? automationRequestContext;
       if (!stored) {
         if (!policy) return;
         const item = (isAutomationHostItem(response.item) ? response.item : undefined)
@@ -1087,12 +1319,14 @@ export function App() {
           ?? (items.length === 1 ? items[0] : undefined);
         writeProjectAutomation(projectId, {
           automationId: item?.id ?? policy.automationId,
-          codexProjectId: automationRequestContext.codexProjectId,
+          codexProjectId: policy.codexProjectId,
+          codexProjectKind: policy.codexProjectKind,
+          codexHostId: policy.codexHostId,
+          workspacePath: policy.workspacePath,
           status: item?.status ?? "PAUSED",
           enabledByUser: policy.enabledByUser,
           quotaAware: policy.quotaAware,
           ...(response.quota ? { quota: response.quota } : {}),
-          ...(responseIssue ? { automationIssue: responseIssue } : {}),
           intervalMinutes: policy.intervalMinutes,
           model: policy.model,
           reasoningEffort: policy.reasoningEffort,
@@ -1107,25 +1341,29 @@ export function App() {
           writeProjectAutomation(projectId, {
             ...stored,
             automationId: undefined,
+            codexProjectId: effectiveProjectIdentity.codexProjectId,
+            codexProjectKind: effectiveProjectIdentity.codexProjectKind,
+            codexHostId: effectiveProjectIdentity.codexHostId,
+            workspacePath: effectiveProjectIdentity.workspacePath,
             status: "PAUSED",
             enabledByUser: policy?.enabledByUser ?? stored.enabledByUser,
             quotaAware: policy?.quotaAware ?? stored.quotaAware,
             ...(response.quota ? { quota: response.quota } : {}),
-            ...(response.automationIssue === null
-              ? { automationIssue: undefined }
-              : responseIssue
-                ? { automationIssue: responseIssue }
-                : {}
-            ),
+            intervalMinutes: policy?.intervalMinutes ?? stored.intervalMinutes,
+            model: policy?.model ?? stored.model,
+            reasoningEffort: policy?.reasoningEffort ?? stored.reasoningEffort,
           });
         }
         return;
       }
-      const intervalMinutes = intervalMinutesFromRrule(item.rrule);
+      const intervalMinutes = policy?.intervalMinutes ?? intervalMinutesFromRrule(item.rrule);
       if (!intervalMinutes) return;
       writeProjectAutomation(projectId, {
         automationId: item.id,
-        codexProjectId: automationRequestContext.codexProjectId,
+        codexProjectId: effectiveProjectIdentity.codexProjectId,
+        codexProjectKind: effectiveProjectIdentity.codexProjectKind,
+        codexHostId: effectiveProjectIdentity.codexHostId,
+        workspacePath: effectiveProjectIdentity.workspacePath,
         status: item.status,
         enabledByUser: policy?.enabledByUser ?? stored.enabledByUser,
         quotaAware: policy?.quotaAware ?? stored.quotaAware,
@@ -1136,17 +1374,9 @@ export function App() {
               ? { quota: stored.quota }
               : {}
         ),
-        ...(response.automationIssue === null
-          ? {}
-          : responseIssue
-            ? { automationIssue: responseIssue }
-            : stored.automationIssue
-              ? { automationIssue: stored.automationIssue }
-              : {}
-        ),
         intervalMinutes,
-        model: policy?.model ?? stored.model ?? item.model,
-        reasoningEffort: policy?.reasoningEffort ?? stored.reasoningEffort ?? item.reasoningEffort,
+        model: policy?.model ?? item.model,
+        reasoningEffort: policy?.reasoningEffort ?? item.reasoningEffort,
       });
     } catch (error) {
       setAutomationError(error instanceof Error
@@ -1168,6 +1398,7 @@ export function App() {
 
   const saveProjectAutomation = useCallback((options: ProjectAutomationOptions) => {
     if (!automationRequestContext) return;
+    automationSaveRevisionRef.current += 1;
     const queuedSave = {
       projectId: automationRequestContext.taskboardProjectId,
       context: automationRequestContext,
@@ -1181,6 +1412,12 @@ export function App() {
     automationRequestContext,
     drainQueuedAutomationSaves,
   ]);
+
+  const automationRequestContextKey = automationRequestContext
+    ? JSON.stringify(automationRequestContext)
+    : "";
+  const reconcileProjectAutomationRef = useRef(reconcileProjectAutomation);
+  reconcileProjectAutomationRef.current = reconcileProjectAutomation;
 
   function openTaskDetail(task: Pick<Task, "identifier" | "projectId">) {
     const fullTask = tasksRef.current.find((candidate) => candidate.identifier === task.identifier);
@@ -1346,8 +1583,8 @@ export function App() {
 
   useEffect(() => {
     setAutomationError(null);
-    void reconcileProjectAutomation();
-  }, [selectedProjectId, reconcileProjectAutomation]);
+    void reconcileProjectAutomationRef.current();
+  }, [selectedProjectId, automationRequestContextKey]);
 
   useEffect(() => {
     if (!embedded || window.parent === window) return;
@@ -1393,17 +1630,56 @@ export function App() {
         return;
       }
 
-      if (message.type === "taskboard:thread-prepared") {
-        setOpeningThreadTaskId(null);
+      if (message.type === "taskboard:thread-prepared" && message.payload) {
+        const payload = message.payload as { taskId?: unknown; threadId?: unknown };
+        if (typeof payload.taskId === "string" && pendingRemoteThreadClaimsRef.current.has(payload.taskId)) {
+          void bindPreparedRemoteThread(payload.taskId, payload.threadId);
+        } else if (typeof payload.taskId === "string" && pendingCreatedThreadBindingsRef.current.has(payload.taskId)) {
+          void bindPreparedCreatedThread(payload.taskId, payload.threadId);
+        } else {
+          setOpeningThreadTaskId(null);
+        }
         return;
       }
 
       if (message.type === "taskboard:thread-create-error" && message.payload) {
-        const payload = message.payload as { taskId?: unknown; error?: unknown };
-        setOpeningThreadTaskId(null);
+        const payload = message.payload as {
+          taskId?: unknown;
+          error?: unknown;
+          threadId?: unknown;
+          uncertain?: unknown;
+        };
+        if (typeof payload.taskId === "string" && pendingRemoteThreadClaimsRef.current.has(payload.taskId)) {
+          void compensateFailedRemoteThread(
+            payload.taskId,
+            payload.error,
+            payload.threadId,
+            payload.uncertain === true,
+          );
+        } else if (typeof payload.taskId === "string" && pendingCreatedThreadBindingsRef.current.has(payload.taskId)) {
+          if (typeof payload.threadId === "string" && payload.threadId.trim()) {
+            void bindPreparedCreatedThread(payload.taskId, payload.threadId);
+          } else {
+            pendingCreatedThreadBindingsRef.current.delete(payload.taskId);
+            setOpeningThreadTaskId(null);
+            setActionError(typeof payload.error === "string"
+              ? payload.error
+              : textRef.current("无法在 Codex 中创建对话。", "Could not create the conversation in Codex."));
+          }
+        } else {
+          setOpeningThreadTaskId(null);
+          setActionError(typeof payload.error === "string"
+            ? payload.error
+            : textRef.current("无法在 Codex 中创建对话。", "Could not create the conversation in Codex."));
+        }
+        return;
+      }
+
+      if (message.type === "taskboard:thread-open-error" && message.payload) {
+        const payload = message.payload as { error?: unknown };
         setActionError(typeof payload.error === "string"
           ? payload.error
-          : textRef.current("无法在 Codex 中创建对话。", "Could not create the conversation in Codex."));
+          : textRef.current("无法打开 Codex 对话。", "Could not open the Codex conversation."));
         return;
       }
 
@@ -1430,6 +1706,7 @@ export function App() {
         )));
       }
       pendingAutomationRequestsRef.current.clear();
+      pendingCreatedThreadBindingsRef.current.clear();
     };
   }, [embedded, host]);
 
@@ -1472,13 +1749,19 @@ export function App() {
   }, [detailTaskId, embedded, embeddedFrameChallenge, selectedProjectId]);
 
   const loadProjectList = useCallback(async (signal?: AbortSignal) => {
-    setLoadError(null);
+    const requestId = ++projectsRequestRef.current;
+    setProjectLoadError((current) => (
+      current?.operation === "initial" ? { ...current, requestId } : current
+    ));
     try {
       const [nextProjects, metadata, workspaces] = await Promise.all([
         listProjects(signal),
         getTaskboardMetadata(signal),
         listDeviceWorkspaces(signal),
       ]);
+      if (requestId !== projectsRequestRef.current) return;
+      const nextJiraConnection = await getJiraConnection(signal);
+      if (requestId !== projectsRequestRef.current) return;
       setTaskboardMetadata((current) => (
         current
         && current.mode === metadata.mode
@@ -1499,6 +1782,7 @@ export function App() {
         return next;
       });
       setProjects(nextProjects);
+      setJiraConnection(nextJiraConnection);
       setSelectedProjectId((current) => {
         const fromQuery = new URLSearchParams(window.location.search).get("project");
         if (fromQuery && nextProjects.some((project) => project.id === fromQuery)) return fromQuery;
@@ -1507,8 +1791,18 @@ export function App() {
           ?? nextProjects[0]?.id
           ?? GLOBAL_PROJECT_ID;
       });
+      setProjectLoadError((current) => (
+        current?.operation === "initial" && current.requestId === requestId ? null : current
+      ));
     } catch (error) {
-      if ((error as Error).name !== "AbortError") setLoadError(errorMessage(error));
+      if ((error as Error).name !== "AbortError" && requestId === projectsRequestRef.current) {
+        setProjectLoadError({
+          source: "projects",
+          operation: "initial",
+          requestId,
+          message: errorMessage(error),
+        });
+      }
     }
   }, []);
 
@@ -1519,10 +1813,26 @@ export function App() {
   }, [loadProjectList]);
 
   const refreshProjectList = useCallback(async () => {
+    const requestId = ++projectsRequestRef.current;
+    setProjectLoadError((current) => (
+      current?.operation === "refresh" ? { ...current, requestId } : current
+    ));
     try {
-      setProjects(await listProjects());
+      const nextProjects = await listProjects();
+      if (requestId !== projectsRequestRef.current) return;
+      setProjects(nextProjects);
+      setProjectLoadError((current) => (
+        current?.operation === "refresh" && current.requestId === requestId ? null : current
+      ));
     } catch (error) {
-      setLoadError(errorMessage(error));
+      if (requestId === projectsRequestRef.current) {
+        setProjectLoadError({
+          source: "projects",
+          operation: "refresh",
+          requestId,
+          message: errorMessage(error),
+        });
+      }
     }
   }, []);
 
@@ -1532,7 +1842,9 @@ export function App() {
   ) => {
     const requestId = ++tasksRequestRef.current;
     if (!options.quiet) setTasksLoading(true);
-    setLoadError(null);
+    setTasksLoadError((current) => (
+      current ? { ...current, requestId } : current
+    ));
     try {
       const [nextTasks, nextArchivedTasks] = await Promise.all([
         listTasks(projectId, options.signal),
@@ -1541,10 +1853,20 @@ export function App() {
       if (requestId !== tasksRequestRef.current) return;
       setTasks(sortTasks(nextTasks));
       setArchivedTasks(sortTasks(nextArchivedTasks));
+      setProjects((current) => current.map((project) => {
+        if (project.id !== projectId || project.source !== "jira") return project;
+        const labels = [...new Set(nextTasks.flatMap((task) => task.labels))];
+        return JSON.stringify(labels) === JSON.stringify(project.labels)
+          ? project
+          : { ...project, labels };
+      }));
       setHasLoadedTasks(true);
+      setTasksLoadError((current) => (
+        current?.requestId === requestId ? null : current
+      ));
     } catch (error) {
       if ((error as Error).name !== "AbortError" && requestId === tasksRequestRef.current) {
-        setLoadError(errorMessage(error));
+        setTasksLoadError({ source: "tasks", requestId, message: errorMessage(error) });
       }
     } finally {
       if (!options.quiet && requestId === tasksRequestRef.current) setTasksLoading(false);
@@ -1563,6 +1885,14 @@ export function App() {
     void refreshTasks(selectedProjectId, { signal: controller.signal });
     return () => controller.abort();
   }, [refreshTasks, selectedProjectId]);
+
+  useEffect(() => {
+    if (!isJiraProject || !selectedProjectId) return;
+    const timer = window.setInterval(() => {
+      void refreshTasks(selectedProjectId, { quiet: true });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [isJiraProject, refreshTasks, selectedProjectId]);
 
   const refreshWorkflowOptions = useCallback(async (projectId: string, signal?: AbortSignal) => {
     const record = await getWorkflowWorkspace<unknown>(projectId, signal);
@@ -1591,9 +1921,7 @@ export function App() {
     }
     const controller = new AbortController();
     const codexProjectId = selectedProjectId === GLOBAL_PROJECT_ID ? hostContext?.projectId : selectedProjectId;
-    const codexThreadId = hostContext?.threadId
-      ?? (detailTask ? preferredTaskThreadId(detailTask) : null)
-      ?? undefined;
+    const codexThreadId = hostContext?.threadId ?? detailTask?.threadId ?? undefined;
     setDevelopmentScan({ workspacePath: selectedDeviceWorkspacePath ?? null, contexts: [] });
     setDevelopmentScanLoading(true);
     void listDevelopmentContexts(
@@ -1618,7 +1946,6 @@ export function App() {
     return () => controller.abort();
   }, [
     detailTask?.threadId,
-    detailTask?.conversationRefs,
     hostContext?.projectId,
     hostContext?.threadId,
     rememberDeviceWorkspacePath,
@@ -1666,9 +1993,10 @@ export function App() {
     refreshWorkflowOptions,
   ]);
 
-  function pushUndo(message: string, undo: () => Promise<void>) {
-    const operation = { id: ++undoSequenceRef.current, message, undo };
+  function pushUndo(message: string | null, undo: () => Promise<void>) {
+    const operation = { id: ++undoSequenceRef.current, undo };
     undoStackRef.current = [...undoStackRef.current.slice(-19), operation];
+    if (!message) return;
     setAnnouncementValue("");
     setUndoNotice({ id: operation.id, message });
   }
@@ -1731,6 +2059,7 @@ export function App() {
         && !event.metaKey
         && !event.ctrlKey
         && selectedProjectId
+        && !isJiraProject
         && boardView !== "workflow"
       ) {
         event.preventDefault();
@@ -1752,7 +2081,7 @@ export function App() {
 
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
-  }, [boardView, contextMenu, detailTaskId, editor, projectMenuOpen, selectedProjectId]);
+  }, [boardView, contextMenu, detailTaskId, editor, isJiraProject, projectMenuOpen, selectedProjectId]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter(
@@ -1768,8 +2097,8 @@ export function App() {
   const hasActiveTaskFilters = Boolean(search.trim()) || activeFilterCount > 0;
 
   const trackedCodexThreadIds = useMemo(() => [...new Set(tasks
-    .filter((task) => task.status === "in_progress")
-    .map((task) => normalizeCodexThreadId(preferredTaskThreadId(task)))
+    .filter((task) => task.status === "in_progress" && task.threadId)
+    .map((task) => normalizeCodexThreadId(task.threadId))
     .filter(Boolean))].sort(), [tasks]);
   const trackedCodexThreadIdsKey = trackedCodexThreadIds.join(",");
 
@@ -1818,7 +2147,7 @@ export function App() {
     const runningNativeThreadId = hostContext?.threadRunning
       ? hostContext.threadId ?? null
       : null;
-    const taskThreadId = normalizeCodexThreadId(preferredTaskThreadId(task));
+    const taskThreadId = normalizeCodexThreadId(task.threadId);
     return [task.id, taskCardPresentation(
       task,
       aiThreads,
@@ -1858,88 +2187,190 @@ export function App() {
     }
   }
 
+  function updateBoardCardDisplay(value: BoardCardDisplay) {
+    setBoardCardDisplay(value);
+    taskboardStorage.setItem(BOARD_CARD_DISPLAY_KEY, JSON.stringify(value));
+  }
+
   async function saveEditor(
-    draft: TaskEditorSaveDraft,
+    draft: TaskDraft,
     attachments: File[],
     inlineImages: PendingInlineImage[],
-    threadId?: string,
+    createOptions?: NewTaskCreateOptions,
   ) {
     if (!selectedProjectId || !editor) return;
     setActionError(null);
+    const creating = editor.task === null;
+    let saved: Task;
     try {
-      const creating = editor.task === null;
-      const savedDraft = creating ? { ...draft, status: "todo" as const } : draft;
-      let saved = editor.task
-        ? await updateTaskRequest(editor.task, savedDraft)
-        : await createTaskRequest(selectedProjectId, savedDraft, threadId);
-      if (creating) {
-        setProjects((current) => current.map((project) => (
-          project.id === selectedProjectId
-            ? { ...project, issueCount: project.issueCount + 1 }
-            : project
-        )));
-      }
-      let uploadedAttachments = 0;
-      let failedAttachments = 0;
-      if (creating && (attachments.length > 0 || inlineImages.length > 0)) {
-        const [results, inlineAttachments] = await Promise.all([
-          Promise.allSettled(
-            attachments.map((file) => uploadAttachment(saved.id, file)),
-          ),
-          Promise.all(
-            inlineImages.map((image) => uploadAttachment(saved.id, image.file)),
-          ),
-        ]);
-        uploadedAttachments = results.filter((result) => result.status === "fulfilled").length;
-        failedAttachments = results.length - uploadedAttachments;
-        if (inlineImages.length > 0) {
-          const description = resolveInlineMediaMarkdown(
-            savedDraft.description,
-            inlineImages,
-            inlineAttachments,
-          );
-          saved = await updateTaskRequest(saved, { ...savedDraft, description });
-        }
-      }
-      setTasks((current) => sortTasks([
-        ...current.filter((task) => task.id !== saved.id),
-        saved,
-      ]));
-      if (creating) setNewTaskDraft(null);
-      setEditor(null);
-      if (failedAttachments > 0) {
-        setActionError(text(
-          `${saved.identifier} 已创建，但有 ${failedAttachments} 个附件上传失败，可在详情页重试。`,
-          `${saved.identifier} was created, but ${failedAttachments} attachments failed to upload. Try again from the details page.`,
-        ));
-      }
-      if (creating) {
-        const totalUploaded = uploadedAttachments + inlineImages.length;
-        const message = text(
-          `${saved.identifier} 已创建${totalUploaded > 0 ? `，已上传 ${totalUploaded} 个附件` : ""}。`,
-          `${saved.identifier} was created${totalUploaded > 0 ? ` with ${totalUploaded} attachments uploaded` : ""}.`,
-        );
-        pushUndo(message, async () => {
-          const candidate = tasksRef.current.find((task) => task.id === saved.id);
-          const current = candidate && candidate.version >= saved.version ? candidate : saved;
-          await archiveTaskRequest(current);
-          setTasks((tasks) => tasks.filter((task) => task.id !== saved.id));
-        });
-      } else if (editor.task) {
-        const previous = editor.task;
-        const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
-        if (!draft.assigneeTarget || previousAssigneeTarget) {
-          pushUndo(
-            text(`${saved.identifier} 已更新。`, `${saved.identifier} was updated.`),
-            () => restoreTaskDetails(previous, saved, previousAssigneeTarget),
-          );
-        }
-      }
+      saved = editor.task
+        ? await updateTaskRequest(editor.task, draft)
+        : await createTaskRequest(selectedProjectId, draft);
     } catch (error) {
       if (error instanceof ApiError && error.code === "VERSION_CONFLICT") {
         void refreshTasks(selectedProjectId, { quiet: true });
       }
       throw error;
+    }
+    if (creating) {
+      setProjects((current) => current.map((project) => (
+        project.id === selectedProjectId
+          ? { ...project, issueCount: project.issueCount + 1 }
+          : project
+      )));
+    }
+    let failedAttachments = 0;
+    let postCreateWriteFailed = false;
+    if (creating && (attachments.length > 0 || inlineImages.length > 0)) {
+      const [results, inlineResults] = await Promise.all([
+          Promise.allSettled(
+            attachments.map((file) => uploadAttachment(saved.id, file, "attachment")),
+          ),
+          Promise.allSettled(
+            inlineImages.map((image) => uploadAttachment(saved.id, image.file, "inline")),
+          ),
+      ]);
+      failedAttachments = results.filter((result) => result.status === "rejected").length;
+      const inlineAttachments = inlineResults.flatMap((result) => (
+        result.status === "fulfilled" ? [result.value] : []
+      ));
+      if (inlineAttachments.length !== inlineImages.length) {
+        postCreateWriteFailed = true;
+      } else if (inlineImages.length > 0) {
+        try {
+          const description = resolveInlineMediaMarkdown(
+            draft.description,
+            inlineImages,
+            inlineAttachments,
+          );
+          saved = await updateTaskRequest(saved, { ...draft, description });
+        } catch {
+          postCreateWriteFailed = true;
+        }
+      }
+    }
+    const relationUpdates = new Map<string, Task>();
+    const movedSubIssues: Array<{ task: Task; previousParentId: string | null }> = [];
+    let addedParentId: string | null = null;
+    const addedRelatedIds: string[] = [];
+    let relationWriteFailed = false;
+    if (creating && createOptions) {
+      const { parentId, relatedIds, subIssueIds } = createOptions.relations;
+      try {
+        if (parentId) {
+          const result = await addTaskRelation(saved, "parent", parentId);
+          saved = result.task;
+          addedParentId = parentId;
+          relationUpdates.set(result.relatedTask.id, result.relatedTask);
+        }
+        for (const relatedId of relatedIds) {
+          const result = await addTaskRelation(saved, "related", relatedId);
+          saved = result.task;
+          addedRelatedIds.push(relatedId);
+          relationUpdates.set(result.relatedTask.id, result.relatedTask);
+        }
+        for (const subIssueId of subIssueIds) {
+          const child = relationUpdates.get(subIssueId)
+            ?? tasksRef.current.find((candidate) => candidate.id === subIssueId)!;
+          const previousParentId = child.relations.parent?.id ?? null;
+          const result = await addTaskRelation(child, "parent", saved.id);
+          movedSubIssues.push({ task: result.task, previousParentId });
+          relationUpdates.set(result.task.id, result.task);
+          saved = result.relatedTask;
+        }
+      } catch {
+        relationWriteFailed = true;
+      }
+    }
+    let conversationBindingFailed = false;
+    const conversationMode = createOptions?.conversationMode ?? "new";
+    if (creating && conversationMode === "existing") {
+      const conversation = createOptions?.conversationThreadId
+        ? (hostContext?.recentConversations ?? []).find((candidate) => (
+            candidate.threadId === createOptions.conversationThreadId
+          ))
+        : undefined;
+      if (!conversation) {
+        conversationBindingFailed = true;
+      } else {
+        try {
+          saved = await bindTaskToConversation(saved, conversation);
+        } catch {
+          conversationBindingFailed = true;
+        }
+      }
+    }
+    relationUpdates.set(saved.id, saved);
+    setTasks((current) => sortTasks([
+      ...current.filter((task) => !relationUpdates.has(task.id)),
+      ...relationUpdates.values(),
+    ]));
+    if (creating) setNewTaskDraft(null);
+    const failedWrites = [
+      ...(relationWriteFailed ? [{ zh: "关系", en: "relations" }] : []),
+      ...(conversationBindingFailed ? [{ zh: "对话绑定", en: "conversation binding" }] : []),
+      ...(postCreateWriteFailed ? [{ zh: "正文或图片", en: "description or images" }] : []),
+      ...(failedAttachments > 0 ? [{
+        zh: `${failedAttachments} 个附件`,
+        en: `${failedAttachments} attachment${failedAttachments === 1 ? "" : "s"}`,
+      }] : []),
+    ];
+    if (!creating || !createOptions?.keepOpen || failedWrites.length > 0) setEditor(null);
+    if (failedWrites.length > 0) {
+      setActionError(text(
+        `${saved.identifier} 已创建，但以下内容写入失败：${failedWrites.map((failure) => failure.zh).join("、")}。`,
+        `${saved.identifier} was created, but these follow-up writes failed: ${failedWrites.map((failure) => failure.en).join(", ")}.`,
+      ));
+    }
+    if (creating && conversationMode === "new") openTaskInThread(saved, true);
+    if (creating) {
+      pushUndo(null, async () => {
+        const restoredRelations = new Map<string, Task>();
+        const candidate = tasksRef.current.find((task) => task.id === saved.id);
+        let current = candidate && candidate.version >= saved.version ? candidate : saved;
+        if (addedParentId) {
+          const result = await removeTaskRelation(current, "parent", addedParentId);
+          current = result.task;
+          restoredRelations.set(result.relatedTask.id, result.relatedTask);
+        }
+        for (const relatedId of [...addedRelatedIds].reverse()) {
+          const result = await removeTaskRelation(current, "related", relatedId);
+          current = result.task;
+          restoredRelations.set(result.relatedTask.id, result.relatedTask);
+        }
+        for (const movedSubIssue of [...movedSubIssues].reverse()) {
+          const latestChild = tasksRef.current.find((task) => task.id === movedSubIssue.task.id);
+          const child = latestChild && latestChild.version >= movedSubIssue.task.version
+            ? latestChild
+            : movedSubIssue.task;
+          const removed = await removeTaskRelation(child, "parent", saved.id);
+          restoredRelations.set(removed.task.id, removed.task);
+          current = removed.relatedTask;
+          if (movedSubIssue.previousParentId) {
+            const restored = await addTaskRelation(
+              removed.task,
+              "parent",
+              movedSubIssue.previousParentId,
+            );
+            restoredRelations.set(restored.task.id, restored.task);
+            restoredRelations.set(restored.relatedTask.id, restored.relatedTask);
+          }
+        }
+        await archiveTaskRequest(current);
+        setTasks((tasks) => sortTasks([
+          ...tasks.filter((task) => task.id !== saved.id && !restoredRelations.has(task.id)),
+          ...[...restoredRelations.values()].filter((task) => task.id !== saved.id),
+        ]));
+      });
+    } else if (editor.task) {
+      const previous = editor.task;
+      const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
+      if (!draft.assigneeTarget || previousAssigneeTarget) {
+        pushUndo(
+          null,
+          () => restoreTaskDetails(previous, saved, previousAssigneeTarget),
+        );
+      }
     }
   }
 
@@ -1950,16 +2381,6 @@ export function App() {
     useDropPosition = false,
   ) {
     if (movingTaskId) {
-      setDropTarget(null);
-      setDraggedTaskId(null);
-      setDraggedTaskHeight(0);
-      return;
-    }
-    if (status === "in_progress" && !preferredTaskThreadId(task)) {
-      setActionError(text(
-        "请先在 Codex 对话中打开并发送此任务，再移入处理中。",
-        "Open and send this task in a Codex conversation before moving it to In progress.",
-      ));
       setDropTarget(null);
       setDraggedTaskId(null);
       setDraggedTaskHeight(0);
@@ -2008,13 +2429,7 @@ export function App() {
       setTasks((current) => sortTasks(current.map((candidate) =>
         candidate.id === moved.id ? moved : candidate,
       )));
-      const message = task.status === status
-        ? text(`${task.identifier} 排序已调整。`, `${task.identifier} was reordered.`)
-        : text(
-          `${task.identifier} 已移至${taskStatusLabel(language, status)}。`,
-          `${task.identifier} was moved to ${taskStatusLabel(language, status)}.`,
-        );
-      pushUndo(message, async () => {
+      pushUndo(null, async () => {
         const candidate = tasksRef.current.find((current) => current.id === moved.id);
         const current = candidate && candidate.version >= moved.version ? candidate : moved;
         const restored = await moveTaskRequest(current, previous.status, previous.sortOrder);
@@ -2025,7 +2440,10 @@ export function App() {
         candidate.id === previous.id ? previous : candidate,
       )));
       setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
-        ? "That issue changed elsewhere. The board has been refreshed."
+        ? textRef.current(
+          "该议题已在其他位置更新，看板已重新同步。",
+          "This issue changed elsewhere. The board has been synced.",
+        )
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
     } finally {
@@ -2086,7 +2504,7 @@ export function App() {
       const previousAssigneeTarget = assigneeTargetForActor(previous.assignee, currentUser);
       if (!assigneeTarget || previousAssigneeTarget) {
         pushUndo(
-          text(`${task.identifier} 已更新。`, `${task.identifier} was updated.`),
+          null,
           () => restoreTaskDetails(previous, updated, previousAssigneeTarget),
         );
       }
@@ -2102,6 +2520,33 @@ export function App() {
         )
         : errorMessage(error));
       if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
+      throw error;
+    }
+  }
+
+  async function persistProjectLabel(label: string) {
+    setActionError(null);
+    try {
+      const project = await createProjectLabelRequest(selectedProjectId, label);
+      setProjects((current) => current.map((candidate) => (
+        candidate.id === project.id ? project : candidate
+      )));
+    } catch (error) {
+      setActionError(errorMessage(error));
+      throw error;
+    }
+  }
+
+  async function removeProjectLabel(label: string) {
+    setActionError(null);
+    try {
+      const project = await deleteProjectLabelRequest(selectedProjectId, label);
+      setProjects((current) => current.map((candidate) => (
+        candidate.id === project.id ? project : candidate
+      )));
+      await refreshTasks(selectedProjectId, { quiet: true });
+    } catch (error) {
+      setActionError(errorMessage(error));
       throw error;
     }
   }
@@ -2249,12 +2694,173 @@ export function App() {
     }
   }
 
-  function openThread(threadId: string) {
+  function codexProjectContextForTaskProject(taskboardProjectId: string) {
+    const taskboardProject = projects.find((project) => project.id === taskboardProjectId);
+    const savedIdentity = projectCodexIdentities[taskboardProjectId];
+    if (savedIdentity?.codexProjectKind === "remote") {
+      const liveProject = hostContext?.projects?.find(
+        (project) => project.id === savedIdentity.codexProjectId,
+      );
+      return liveProject?.projectKind === "remote"
+        && liveProject.hostId === savedIdentity.codexHostId
+        && liveProject.workspacePath === savedIdentity.workspacePath
+        ? savedIdentity
+        : null;
+    }
+    const effectiveCodexProjectId = taskboardProjectId === GLOBAL_PROJECT_ID
+      ? hostContext?.projectId
+      : taskboardProjectId;
+    const directCodexProject = hostContext?.projects?.find(
+      (project) => project.id === effectiveCodexProjectId,
+    );
+    const mappedWorkspacePath = taskboardProjectId === GLOBAL_PROJECT_ID
+      ? directCodexProject?.workspacePath ?? hostContext?.workspacePath
+      : deviceWorkspacePaths[taskboardProjectId]
+        ?? taskboardProject?.workspacePath
+        ?? directCodexProject?.workspacePath;
+    const codexProject = directCodexProject ?? hostContext?.projects?.find(
+      (project) => project.workspacePath === mappedWorkspacePath,
+    );
+    if (!codexProject) return null;
+    const workspacePath = mappedWorkspacePath ?? codexProject.workspacePath;
+    if (!workspacePath) return null;
+    return {
+      codexProjectId: codexProject.id,
+      codexProjectKind: codexProject.projectKind ?? "local" as const,
+      codexHostId: codexProject.hostId ?? "local",
+      workspacePath,
+    };
+  }
+
+  async function bindTaskToConversation(
+    task: Task,
+    conversation: HostRecentConversation,
+  ): Promise<Task> {
+    const latestTask = await getTask(task.id);
+    if (latestTask.threadBinding || latestTask.threadId || latestTask.legacyLocalThreadId) {
+      throw new Error(textRef.current(
+        "该任务已经绑定对话，请刷新后重试，避免覆盖原对话。",
+        "This task is already bound to a conversation. Refresh before retrying to avoid overwriting it.",
+      ));
+    }
+    const project = hostContext?.projects?.find((candidate) => (
+      candidate.id === conversation.projectId
+    ));
+    const fallbackIdentity = codexProjectContextForTaskProject(task.projectId);
+    const projectKind = project?.projectKind ?? (
+      fallbackIdentity?.codexProjectId === conversation.projectId
+        ? fallbackIdentity.codexProjectKind
+        : undefined
+    );
+    const codexHostId = project?.hostId ?? (
+      fallbackIdentity?.codexProjectId === conversation.projectId
+        ? fallbackIdentity.codexHostId
+        : undefined
+    );
+    const workspacePath = project?.workspacePath
+      ?? (project?.id === hostContext?.projectId ? hostContext?.workspacePath : undefined)
+      ?? (
+        fallbackIdentity?.codexProjectId === conversation.projectId
+          ? fallbackIdentity.workspacePath
+          : undefined
+      );
+    if (!projectKind || !codexHostId || !workspacePath) {
+      throw new Error(textRef.current(
+        "无法确认该对话所属的 Codex 项目，请刷新侧栏后重试。",
+        "The Codex project for this conversation is unavailable. Refresh the sidebar and try again.",
+      ));
+    }
+    const binding: CodexThreadBinding = {
+      threadId: conversation.threadId,
+      codexProjectId: conversation.projectId,
+      codexProjectKind: projectKind,
+      codexHostId,
+      workspacePath,
+    };
+    const boundTask = await moveTaskRequest(
+      latestTask,
+      latestTask.status,
+      latestTask.sortOrder,
+      binding,
+    );
+    updateTaskFromRemoteThread(boundTask);
+    setAnnouncement(text(
+      `已将 ${boundTask.identifier} 绑定到“${conversation.title}”`,
+      `${boundTask.identifier} is now bound to “${conversation.title}”`,
+    ));
+    return boundTask;
+  }
+
+  async function bindPreparedCreatedThread(taskId: string, rawThreadId: unknown) {
+    const pending = pendingCreatedThreadBindingsRef.current.get(taskId);
+    if (!pending) return;
+    const threadId = typeof rawThreadId === "string" ? rawThreadId.trim() : "";
+    pendingCreatedThreadBindingsRef.current.delete(taskId);
+    setOpeningThreadTaskId(null);
+    if (!threadId) {
+      setActionError(textRef.current(
+        "Codex 没有返回新对话 ID，任务已创建但尚未绑定。",
+        "Codex did not return a new conversation ID. The task was created but remains unbound.",
+      ));
+      return;
+    }
+    try {
+      const boundTask = await bindTaskToConversation(pending.task, {
+        threadId,
+        title: pending.task.title,
+        projectId: pending.identity.codexProjectId,
+      });
+      updateTaskFromRemoteThread(boundTask);
+    } catch (error) {
+      setActionError(textRef.current(
+        `${pending.task.identifier} 已创建对话，但任务绑定失败：${errorMessage(error)}`,
+        `${pending.task.identifier} created a conversation, but task binding failed: ${errorMessage(error)}`,
+      ));
+    }
+  }
+
+  function openThread(binding: CodexThreadBinding) {
+    const remoteProject = binding.codexProjectKind === "remote"
+      ? hostContext?.projects?.find((project) => (
+          project.id === binding.codexProjectId
+          && project.projectKind === "remote"
+          && project.hostId === binding.codexHostId
+          && project.workspacePath === binding.workspacePath
+        ))
+      : null;
+    if (binding.codexProjectKind === "remote" && !remoteProject) {
+      setActionError(text(
+        "该对话绑定的 SSH 远程项目或主机当前不可用。",
+        "The SSH remote project or host bound to this conversation is not available.",
+      ));
+      return;
+    }
     if (embedded && window.parent !== window) {
-      postEmbeddedHostMessage({ type: "taskboard:open-thread", payload: { threadId } });
+      postEmbeddedHostMessage({
+        type: "taskboard:open-thread",
+        payload: binding,
+      });
       return;
     }
 
+    if (binding.codexProjectKind === "remote") {
+      setActionError(text(
+        "请在 Codex App 中打开该 SSH 远程对话。",
+        "Open this SSH remote conversation in the Codex app.",
+      ));
+      return;
+    }
+    window.location.assign(`codex://threads/${encodeURIComponent(binding.threadId.trim())}`);
+  }
+
+  function openLegacyLocalThread(threadId: string) {
+    if (embedded && window.parent !== window) {
+      postEmbeddedHostMessage({
+        type: "taskboard:open-thread",
+        payload: { threadId, legacyLocal: true },
+      });
+      return;
+    }
     window.location.assign(`codex://threads/${encodeURIComponent(threadId.trim())}`);
   }
 
@@ -2266,7 +2872,11 @@ export function App() {
       }));
       return;
     }
-    if (conversation.nativeThreadId) openThread(conversation.nativeThreadId);
+    if (conversation.threadBinding) {
+      openThread(conversation.threadBinding);
+    } else if (conversation.legacyLocalThreadId) {
+      openLegacyLocalThread(conversation.legacyLocalThreadId);
+    }
   }
 
   function expandCodexSidebar() {
@@ -2274,44 +2884,359 @@ export function App() {
     postEmbeddedHostMessage({ type: "taskboard:expand-sidebar" });
   }
 
-  function openTaskInThread(task: Task) {
-    const preferredThreadId = preferredTaskThreadId(task);
-    if (preferredThreadId) {
-      openThread(preferredThreadId);
+  function remoteIdentityForTask(
+    task: Task,
+    baseIdentity: CodexProjectIdentity,
+  ): CodexProjectIdentity | null {
+    if (task.developmentContext?.type === "worktree") {
+      const worktreePath = task.developmentContext.path;
+      const matches = (hostContext?.projects ?? []).filter((project) => (
+        project.projectKind === "remote"
+        && project.hostId === baseIdentity.codexHostId
+        && project.workspacePath === worktreePath
+      ));
+      if (matches.length !== 1) return null;
+      return {
+        codexProjectId: matches[0].id,
+        codexProjectKind: "remote",
+        codexHostId: matches[0].hostId!,
+        workspacePath: matches[0].workspacePath!,
+      };
+    }
+    const liveProject = hostContext?.projects?.find((project) => (
+      project.id === baseIdentity.codexProjectId
+      && project.projectKind === "remote"
+      && project.hostId === baseIdentity.codexHostId
+      && project.workspacePath === baseIdentity.workspacePath
+    ));
+    return liveProject ? baseIdentity : null;
+  }
+
+  function remoteTaskInstruction(task: Task, comments: Awaited<ReturnType<typeof listComments>>) {
+    const commentText = comments.length === 0
+      ? "（无评论）"
+      : comments.map((comment) => (
+          `- ${comment.authorName}（${comment.createdAt}）\n${comment.body}`
+        )).join("\n\n");
+    return [
+      `处理 Taskboard 议题 ${task.identifier}：${task.title}`,
+      `\n完整描述：\n${task.description || "（无描述）"}`,
+      `\n全部评论：\n${commentText}`,
+      `\n开发上下文：\n${JSON.stringify(task.developmentContext)}`,
+      "\n本地 Taskboard 控制器已负责认领、对话绑定、评论和状态写回。远程 worker 不得运行 taskctl。请只完成实现和必要验证，并返回改动、验证结果、执行结果和剩余风险。",
+    ].join("\n");
+  }
+
+  function updateTaskFromRemoteThread(task: Task) {
+    setTasks((current) => sortTasks(current.map((candidate) => (
+      candidate.id === task.id ? task : candidate
+    ))));
+  }
+
+  async function addRemoteThreadFailureComment(taskId: string, body: string) {
+    try {
+      await createComment(taskId, body, undefined, null);
+      setCommentsRevision((current) => current + 1);
+    } catch {}
+  }
+
+  async function bindPreparedRemoteThread(taskId: string, rawThreadId: unknown) {
+    const pending = pendingRemoteThreadClaimsRef.current.get(taskId);
+    if (!pending) return;
+    const threadId = typeof rawThreadId === "string" ? rawThreadId.trim() : "";
+    if (!threadId) {
+      await compensateFailedRemoteThread(taskId, textRef.current(
+        "Codex 没有返回新对话 ID。",
+        "Codex did not return the new conversation ID.",
+      ));
       return;
     }
+    const binding: CodexThreadBinding = { threadId, ...pending.identity };
+    try {
+      const boundTask = await moveTaskRequest(
+        pending.claimedTask,
+        "in_progress",
+        pending.claimedTask.sortOrder,
+        binding,
+      );
+      pendingRemoteThreadClaimsRef.current.delete(taskId);
+      updateTaskFromRemoteThread(boundTask);
+      setOpeningThreadTaskId(null);
+      setAnnouncement(textRef.current(
+        `${boundTask.identifier} 已绑定到新的 SSH 对话。`,
+        `${boundTask.identifier} is bound to the new SSH conversation.`,
+      ));
+    } catch (error) {
+      let recoveredTask: Task | null = null;
+      if (!(error instanceof ApiError && error.code === "VERSION_CONFLICT")) {
+        try {
+          const latest = await getTask(taskId);
+          const bindingWasSaved = latest.status === "in_progress"
+            && latest.projectId === pending.claimedTask.projectId
+            && latest.archivedAt === null
+            && latest.threadBinding?.threadId === binding.threadId
+            && latest.threadBinding.codexProjectId === binding.codexProjectId
+            && latest.threadBinding.codexProjectKind === binding.codexProjectKind
+            && latest.threadBinding.codexHostId === binding.codexHostId
+            && latest.threadBinding.workspacePath === binding.workspacePath;
+          if (bindingWasSaved) {
+            recoveredTask = latest;
+          } else if (
+            latest.version === pending.claimedTask.version
+            && latest.projectId === pending.claimedTask.projectId
+            && latest.status === "in_progress"
+            && latest.archivedAt === null
+            && latest.threadId === null
+            && latest.threadBinding === null
+          ) {
+            recoveredTask = await moveTaskRequest(
+              latest,
+              "blocked",
+              undefined,
+              binding,
+            );
+          }
+        } catch {}
+      }
+      pendingRemoteThreadClaimsRef.current.delete(taskId);
+      setOpeningThreadTaskId(null);
+      if (recoveredTask) {
+        updateTaskFromRemoteThread(recoveredTask);
+        if (recoveredTask.status === "in_progress") return;
+      }
+      await addRemoteThreadFailureComment(taskId, textRef.current(
+        `已创建 SSH 对话 ${threadId}，但任务 binding 写入发生冲突或失败；未覆盖其他控制端的更新。`,
+        `SSH conversation ${threadId} was created, but saving the task binding conflicted or failed. No other controller update was overwritten.`,
+      ));
+      setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
+        ? textRef.current(
+          `SSH 对话 ${threadId} 已创建，但议题已在其他位置更新，未覆盖该更新。`,
+          `SSH conversation ${threadId} was created, but the issue changed elsewhere. That update was not overwritten.`,
+        )
+        : errorMessage(error));
+    }
+  }
+
+  async function compensateFailedRemoteThread(
+    taskId: string,
+    rawError: unknown,
+    rawThreadId?: unknown,
+    uncertain = false,
+  ) {
+    const pending = pendingRemoteThreadClaimsRef.current.get(taskId);
+    if (!pending) return;
+    pendingRemoteThreadClaimsRef.current.delete(taskId);
+    const error = typeof rawError === "string"
+      ? rawError
+      : textRef.current("无法创建 Codex 对话。", "Could not create the Codex conversation.");
+    const threadId = typeof rawThreadId === "string" ? rawThreadId.trim() : "";
+    const binding = threadId ? { threadId, ...pending.identity } : null;
+    const status: TaskStatus = threadId || uncertain ? "blocked" : pending.previousTask.status;
+    await addRemoteThreadFailureComment(taskId, threadId
+      ? textRef.current(
+        `SSH 对话 ${threadId} 已创建，但后续确认失败：${error}`,
+        `SSH conversation ${threadId} was created, but follow-up confirmation failed: ${error}`,
+      )
+      : uncertain
+        ? textRef.current(
+          `创建 SSH 对话的结果不确定，任务已停止自动重试：${error}`,
+          `The SSH conversation result is uncertain, so automatic retry was stopped: ${error}`,
+        )
+        : textRef.current(
+          `创建 SSH 对话失败，任务已退回 ${pending.previousTask.status}：${error}`,
+          `Creating the SSH conversation failed. The task was returned to ${pending.previousTask.status}: ${error}`,
+        ));
+    try {
+      const compensated = await moveTaskRequest(
+        pending.claimedTask,
+        status,
+        pending.previousTask.sortOrder,
+        binding,
+      );
+      updateTaskFromRemoteThread(compensated);
+    } catch (moveError) {
+      if (!(moveError instanceof ApiError && moveError.code === "VERSION_CONFLICT")) {
+        setActionError(errorMessage(moveError));
+      }
+    } finally {
+      setOpeningThreadTaskId(null);
+    }
+    setActionError(error);
+  }
+
+  async function openRemoteTaskInThread(task: Task, baseIdentity: CodexProjectIdentity) {
+    try {
+      const [latestTask, comments] = await Promise.all([getTask(task.id), listComments(task.id)]);
+      if (latestTask.threadBinding) {
+        setOpeningThreadTaskId(null);
+        openThread(latestTask.threadBinding);
+        return;
+      }
+      if (latestTask.status !== "todo" || latestTask.archivedAt !== null || latestTask.threadId) {
+        throw new Error(textRef.current(
+          "该议题已被其他控制器认领或绑定，请刷新后重试。",
+          "This issue was claimed or bound by another controller. Refresh and try again.",
+        ));
+      }
+      const identity = remoteIdentityForTask(latestTask, baseIdentity);
+      if (!identity) {
+        throw new Error(latestTask.developmentContext?.type === "worktree"
+          ? textRef.current(
+            "目标 SSH worktree 未在保存的主机中添加或映射。",
+            "The target SSH worktree is not added or mapped on the saved host.",
+          )
+          : textRef.current(
+            "已保存的 SSH 远程项目或主机当前不可用。",
+            "The saved SSH remote project or host is not available.",
+          ));
+      }
+      const claimedTask = await moveTaskRequest(latestTask, "in_progress", undefined, null);
+      pendingRemoteThreadClaimsRef.current.set(task.id, {
+        claimedTask,
+        previousTask: latestTask,
+        identity,
+      });
+      updateTaskFromRemoteThread(claimedTask);
+      postEmbeddedHostMessage({
+        type: "taskboard:create-thread",
+        payload: {
+          taskId: latestTask.id,
+          identifier: latestTask.identifier,
+          title: latestTask.title,
+          instruction: remoteTaskInstruction(latestTask, comments),
+          codexProjectId: identity.codexProjectId,
+          codexProjectKind: identity.codexProjectKind,
+          codexHostId: identity.codexHostId,
+          codexProjectWorkspacePath: identity.workspacePath,
+          workspacePath: identity.workspacePath,
+        },
+      });
+    } catch (error) {
+      setOpeningThreadTaskId(null);
+      setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
+        ? textRef.current(
+          "该议题已在其他位置更新，未创建重复对话。",
+          "This issue changed elsewhere. No duplicate conversation was created.",
+        )
+        : errorMessage(error));
+      if (selectedProjectId) void refreshTasks(selectedProjectId, { quiet: true });
+    }
+  }
+
+  function openTaskInThread(task: Task, bindCreatedThread = false) {
     const worktreePath = task.developmentContext?.type === "worktree"
       ? task.developmentContext.path
       : null;
+    const savedRemoteIdentity = projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
+      ? projectCodexIdentities[task.projectId]
+      : null;
+    const codexProjectContext = savedRemoteIdentity
+      ?? codexProjectContextForTaskProject(task.projectId);
+    if (
+      projectCodexIdentities[task.projectId]?.codexProjectKind === "remote"
+      && !codexProjectContext
+    ) {
+      setActionError(text(
+        "已保存的 SSH 远程项目或主机当前不可用。",
+        "The saved SSH remote project or host is not available.",
+      ));
+      return;
+    }
     const workspacePath = worktreePath
+      ?? codexProjectContext?.workspacePath
       ?? selectedDeviceWorkspacePath
-      ?? developmentScan.workspacePath
-      ?? hostContext?.workspacePath;
+      ?? selectedProject?.workspacePath
+      ?? (
+        selectedProject?.id === GLOBAL_PROJECT_ID
+        || hostContext?.projectId === selectedProject?.id
+          ? hostContext?.workspacePath
+          : undefined
+      );
+    const threadBindingIdentity = codexProjectContext && workspacePath
+      ? {
+          ...codexProjectContext,
+          workspacePath,
+        }
+      : null;
     const instruction = `e-taskboard 处理任务面板任务 ${task.identifier}，并同步进度状态。`;
 
     if (!embedded || window.parent === window) {
-      const query = new URLSearchParams();
-      if (workspacePath) query.set("path", workspacePath);
-      query.set("prompt", instruction);
-      window.location.assign(`codex://new?${query.toString().replace(/\+/g, "%20")}`);
+      setActionError([
+        "在对话中打开仅可在 Codex 内嵌任务面板中使用。请从 Codex 侧栏打开任务面板后重试。",
+        "Open in conversation is available only in the embedded Codex Taskboard. Open Taskboard from the Codex sidebar and try again.",
+      ]);
+      return;
+    }
+    if (codexProjectContext?.codexProjectKind === "remote" && !codexProjectContext.workspacePath) {
+      setActionError(text(
+        "SSH 远程项目缺少精确工作目录映射。",
+        "The SSH remote project is missing its exact workspace mapping.",
+      ));
       return;
     }
     if (openingThreadTaskId) return;
-    const codexProject = hostContext?.projects?.find((project) => project.id === selectedProject?.id);
     setOpeningThreadTaskId(task.id);
     setActionError(null);
+    if (bindCreatedThread && !threadBindingIdentity) {
+      setOpeningThreadTaskId(null);
+      setActionError(text(
+        "任务已创建，但当前项目没有可用于绑定对话的 Codex 项目信息。",
+        "The task was created, but this project has no Codex project information for conversation binding.",
+      ));
+      return;
+    }
+    if (codexProjectContext?.codexProjectKind === "remote" && codexProjectContext.workspacePath) {
+      if (bindCreatedThread) {
+        const identity = remoteIdentityForTask(task, threadBindingIdentity!);
+        if (!identity) {
+          setOpeningThreadTaskId(null);
+          setActionError(text(
+            "任务对应的 SSH worktree 当前不可用，未创建新对话。",
+            "The SSH worktree for this task is unavailable, so no new conversation was created.",
+          ));
+          return;
+        }
+        pendingCreatedThreadBindingsRef.current.set(task.id, { task, identity });
+        postEmbeddedHostMessage({
+          type: "taskboard:create-thread",
+          payload: {
+            taskId: task.id,
+            identifier: task.identifier,
+            title: task.title,
+            instruction: remoteTaskInstruction(task, []),
+            codexProjectId: identity.codexProjectId,
+            codexProjectKind: identity.codexProjectKind,
+            codexHostId: identity.codexHostId,
+            codexProjectWorkspacePath: identity.workspacePath,
+            workspacePath: identity.workspacePath,
+          },
+        });
+        return;
+      }
+      void openRemoteTaskInThread(task, {
+        ...codexProjectContext,
+        workspacePath: codexProjectContext.workspacePath,
+      });
+      return;
+    }
+    if (bindCreatedThread) {
+      pendingCreatedThreadBindingsRef.current.set(task.id, {
+        task,
+        identity: threadBindingIdentity!,
+      });
+    }
     postEmbeddedHostMessage({
       type: "taskboard:create-thread",
       payload: {
         taskId: task.id,
         identifier: task.identifier,
+        title: task.title,
         instruction,
-        codexProjectId: codexProject?.id ?? (
-          selectedProject?.id === GLOBAL_PROJECT_ID ? hostContext?.projectId : selectedProject?.id
-        ),
-        projectName: selectedProject?.name,
+        codexProjectId: codexProjectContext?.codexProjectId,
+        codexProjectKind: codexProjectContext?.codexProjectKind ?? "local",
+        codexHostId: codexProjectContext?.codexHostId ?? "local",
+        codexProjectWorkspacePath: codexProjectContext?.workspacePath,
         workspacePath,
-        workspaceLabel: worktreePath ? workspaceName(worktreePath) : undefined,
       },
     });
   }
@@ -2355,11 +3280,73 @@ export function App() {
           if (!project) throw error;
         }
       }
+      if (choice.codexIdentity) {
+        setProjectCodexIdentities((current) => {
+          const next = { ...current, [project!.id]: choice.codexIdentity! };
+          taskboardStorage.setItem(PROJECT_CODEX_IDENTITIES_KEY, JSON.stringify(next));
+          return next;
+        });
+        rememberDeviceWorkspacePath(project.id, choice.codexIdentity.workspacePath);
+      }
       changeProject(project.id);
     } catch (error) {
       setActionError(errorMessage(error));
     } finally {
       setOpeningProjectId(null);
+    }
+  }
+
+  function openJiraDialog() {
+    setProjectMenuOpen(false);
+    setProjectContextMenu(null);
+    setJiraError(null);
+    setJiraDialogOpen(true);
+  }
+
+  async function saveJiraConnection(input: {
+    baseUrl: string;
+    username: string;
+    password: string;
+    projects: string[];
+  }) {
+    if (jiraSaving) return;
+    setJiraSaving(true);
+    setJiraError(null);
+    try {
+      const connection = await configureJiraConnection(input);
+      const nextProjects = await listProjects();
+      setJiraConnection(connection);
+      setProjects(nextProjects);
+      setJiraDialogOpen(false);
+      changeProject(connection.projectId);
+      await refreshTasks(connection.projectId);
+      setAnnouncement(text(
+        `已同步 ${connection.displayName ?? connection.username} 的 Jira 任务`,
+        `Synced Jira issues for ${connection.displayName ?? connection.username}`,
+      ));
+    } catch (error) {
+      setJiraError(errorMessage(error));
+    } finally {
+      setJiraSaving(false);
+    }
+  }
+
+  async function syncJiraNow() {
+    if (jiraSyncing || !selectedProjectId) return;
+    setJiraSyncing(true);
+    setActionError(null);
+    try {
+      const connection = await syncJiraConnection();
+      setJiraConnection(connection);
+      await Promise.all([
+        refreshTasks(selectedProjectId, { quiet: true }),
+        refreshProjectList(),
+      ]);
+      setAnnouncement(text("Jira 任务已同步", "Jira issues synced"));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setJiraSyncing(false);
     }
   }
 
@@ -2424,6 +3411,12 @@ export function App() {
       setRecentProjectIds((current) => {
         const next = current.filter((candidate) => candidate !== project.id);
         taskboardStorage.setItem(RECENT_PROJECT_IDS_KEY, JSON.stringify(next));
+        return next;
+      });
+      setProjectCodexIdentities((current) => {
+        const next = { ...current };
+        delete next[project.id];
+        taskboardStorage.setItem(PROJECT_CODEX_IDENTITIES_KEY, JSON.stringify(next));
         return next;
       });
       setPendingProjectDelete(null);
@@ -2584,6 +3577,19 @@ export function App() {
                       type="button"
                       role="menuitem"
                       disabled={openingProjectId !== null}
+                      onClick={openJiraDialog}
+                    >
+                      <LinearIcon className="project-avatar" name="link" />
+                      <span>
+                        {jiraConnection?.configured
+                          ? text("Jira 设置", "Jira settings")
+                          : text("连接 Jira", "Connect Jira")}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={openingProjectId !== null}
                       onClick={openCreateProjectDialog}
                     >
                       <TaskboardIcon className="project-avatar" name="create" />
@@ -2608,7 +3614,19 @@ export function App() {
                 onChange={(options) => void saveProjectAutomation(options)}
               />
             )}
-            {selectedProjectId && boardView !== "workflow" && (
+            {isJiraProject && (
+              <button
+                className="icon-button"
+                type="button"
+                disabled={jiraSyncing}
+                onClick={() => void syncJiraNow()}
+                aria-label={text("同步 Jira", "Sync Jira")}
+                title={text("同步 Jira", "Sync Jira")}
+              >
+                <LinearIcon name="recurrence" />
+              </button>
+            )}
+            {selectedProjectId && !isJiraProject && boardView !== "workflow" && (
               <button
                 className="icon-button header-create-button"
                 type="button"
@@ -2728,6 +3746,13 @@ export function App() {
               onChange={setFilters}
             />
             {boardView === "issues" && (
+              <BoardCardDisplayMenu
+                cover={boardCardDisplay.cover}
+                body={boardCardDisplay.body}
+                onChange={updateBoardCardDisplay}
+              />
+            )}
+            {boardView === "issues" && (
               <button
                 className={`other-tasks-trigger${otherTasksOpen ? " is-open" : ""}`}
                 type="button"
@@ -2745,15 +3770,18 @@ export function App() {
           </div>}
         </div>}
 
-        {(loadError || actionError) && (
+        {(loadError || actionErrorText) && (
           <div className="error-banner" role="alert">
             <span className="error-mark" aria-hidden="true"><LinearIcon name="alert" /></span>
-            <div><strong>{text("任务面板需要处理", "Taskboard needs attention")}</strong><p>{actionError ?? loadError}</p></div>
+            <div><strong>{text("任务面板需要处理", "Taskboard needs attention")}</strong><p>{actionErrorText ?? loadError?.message}</p></div>
             <button
               type="button"
               onClick={() => {
                 setActionError(null);
-                if (selectedProjectId) void refreshTasks(selectedProjectId);
+                if (loadError?.source === "projects") {
+                  if (loadError.operation === "initial") void loadProjectList();
+                  else void refreshProjectList();
+                } else if (selectedProjectId) void refreshTasks(selectedProjectId);
                 else void loadProjectList();
               }}
             >
@@ -2767,12 +3795,15 @@ export function App() {
             key={detailTask.id}
             task={detailTask}
             tasks={tasks}
+            referenceTasks={referenceTasks}
             currentUser={currentUser}
             availableLabels={availableLabels}
             developmentScan={developmentScan}
             developmentScanLoading={developmentScanLoading}
             commentsRevision={commentsRevision}
             attachmentsRevision={attachmentsRevision}
+            onCreateLabel={persistProjectLabel}
+            onDeleteLabel={removeProjectLabel}
             onUpdate={(current, changes) => updateTaskProperties(current, changes)}
             onOpenTask={openTaskDetail}
             onAddRelation={(current, type, relatedTaskId) => (
@@ -2781,12 +3812,41 @@ export function App() {
             onRemoveRelation={(current, type, relatedTaskId) => (
               mutateTaskRelation("remove", current, type, relatedTaskId)
             )}
+            recentConversations={detailRecentConversations}
+            onBindConversation={bindTaskToConversation}
             onOpenThread={openThread}
+            onOpenLegacyLocalThread={openLegacyLocalThread}
             onOpenInThread={openTaskInThread}
             onCopy={(text, message) => void copyText(text, message)}
             openingThread={openingThreadTaskId === detailTask.id}
             onError={setActionError}
           />
+        ) : hasLoadedTasks
+          && tasks.length === 0
+          && selectedProject
+          && aiImportReadyProjectId === selectedProject.id ? (
+          <div className="page-empty">
+            <h2>{text("当前项目还没有任务", "This project has no issues yet")}</h2>
+            <p>{text(
+              "让 Codex 检查当前项目目录对应的对话，并整理任务状态。",
+              "Ask Codex to inspect conversations for this project directory and organize their task status.",
+            )}</p>
+            <button
+              className="button primary"
+              type="button"
+              onClick={() => setAiOpenThreadRequest((current) => ({
+                projectId: selectedProject.id,
+                issueId: null,
+                composerText: text(
+                  "只检查当前项目目录对应的 Codex 对话。请将其中已完成、处理中和待执行的任务整理并导入当前项目的 Taskboard。",
+                  "Only inspect Codex conversations associated with the current project directory. Organize completed, in-progress, and pending tasks, then import them into this project's Taskboard.",
+                ),
+                requestId: (current?.requestId ?? 0) + 1,
+              }))}
+            >
+              {text("导入当前项目任务状态", "Import current project task status")}
+            </button>
+          </div>
         ) : boardView === "dashboard" ? (
           <DashboardView
             key={selectedProjectId}
@@ -2883,6 +3943,10 @@ export function App() {
                         contextMenuTaskId={contextMenu?.taskId ?? null}
                         availableLabels={availableLabels}
                         currentUser={currentUser}
+                        showCover={boardCardDisplay.cover}
+                        showBody={boardCardDisplay.body}
+                        createEnabled={!isJiraProject}
+                        onCreateLabel={persistProjectLabel}
                         onCreate={(initialStatus) => setEditor({ task: null, status: initialStatus })}
                         onEdit={openTaskDetail}
                         onUpdate={updateTaskProperties}
@@ -2914,10 +3978,15 @@ export function App() {
                     contextMenuTaskId={contextMenu?.taskId ?? null}
                     availableLabels={availableLabels}
                     currentUser={currentUser}
+                    showCover={boardCardDisplay.cover}
+                    showBody={boardCardDisplay.body}
+                    onCreateLabel={persistProjectLabel}
                     restoringTaskId={restoringTaskId}
                     deletingTaskId={deletingArchivedTaskId}
                     onTabChange={setOtherTasksTab}
-                    onCreate={(initialStatus) => setEditor({ task: null, status: initialStatus })}
+                    onCreate={isJiraProject
+                      ? undefined
+                      : (initialStatus) => setEditor({ task: null, status: initialStatus })}
                     onRestore={(task) => void restoreArchivedTask(task)}
                     onDelete={setPendingArchivedTaskDelete}
                     onEdit={openTaskDetail}
@@ -2959,6 +4028,18 @@ export function App() {
         </div>
       )}
 
+      {jiraDialogOpen && (
+        <JiraConnectionDialog
+          connection={jiraConnection}
+          saving={jiraSaving}
+          error={jiraError}
+          onClose={() => {
+            if (!jiraSaving) setJiraDialogOpen(false);
+          }}
+          onSave={saveJiraConnection}
+        />
+      )}
+
       {projectCreateOpen && (
         <div
           className="delete-backdrop"
@@ -2990,7 +4071,7 @@ export function App() {
                 onChange={(event) => setProjectName(event.target.value)}
               />
             </label>
-            {actionError && <p className="project-dialog-error">{actionError}</p>}
+            {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}
             <div>
               <button
                 className="button secondary"
@@ -3136,18 +4217,24 @@ export function App() {
 
       {editor && (
         <TaskEditor
-          key={editor.task?.id ?? `new-${editor.status}`}
+          key={editor.task?.id ?? `new-${selectedProjectId}-${editor.status}`}
           task={editor.task}
+          tasks={tasks.filter((task) => task.projectId === selectedProjectId)}
+          referenceTasks={referenceTasks.filter((task) => task.projectId === selectedProjectId)}
           initialStatus={editor.status}
-          initialDraft={editor.task ? null : newTaskDraft}
+          initialDraft={editor.task || newTaskDraft?.projectId !== selectedProjectId
+            ? null
+            : newTaskDraft.draft}
           labels={availableLabels}
           currentUser={currentUser}
           developmentScan={developmentScan}
           developmentScanLoading={developmentScanLoading}
-          currentThreadId={hostContext?.threadId}
-          recentConversations={hostContext?.recentConversations}
+          recentConversations={createRecentConversations}
+          onCreateLabel={persistProjectLabel}
           onCancel={(draft) => {
-            if (!editor.task) setNewTaskDraft(draft);
+            if (!editor.task) {
+              setNewTaskDraft(draft ? { projectId: selectedProjectId, draft } : null);
+            }
             setEditor(null);
           }}
           onSave={saveEditor}
@@ -3177,13 +4264,17 @@ export function App() {
         />
       )}
 
-      <AiChat
-        available={localAiChatAvailable}
-        projectId={selectedProjectId || null}
-        issueId={detailTaskId}
-        onThreadsChange={setAiThreads}
-        openThreadRequest={aiOpenThreadRequest}
-      />
+      {localAiChatAvailable && (
+        <Suspense fallback={null}>
+          <AiChat
+            available
+            projectId={selectedProjectId || null}
+            issueId={detailTaskId}
+            onThreadsChange={setAiThreads}
+            openThreadRequest={aiOpenThreadRequest}
+          />
+        </Suspense>
+      )}
 
       <div className="sr-only" role="status" aria-live="polite">{announcement}</div>
       {undoNotice && (

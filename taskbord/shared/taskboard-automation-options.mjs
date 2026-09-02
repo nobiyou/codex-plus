@@ -39,13 +39,6 @@ export const AUTOMATION_MODELS = [
 
 const MODELS_BY_SLUG = new Map(AUTOMATION_MODELS.map((model) => [model.slug, model]));
 const REASONING_EFFORTS = new Set(AUTOMATION_MODELS.flatMap((model) => model.efforts));
-const RUNTIME_MODEL_ALIASES = new Map([
-  ["gpt-5.6-sol-wm", "gpt-5.6-sol"],
-]);
-
-export function canonicalAutomationModel(value) {
-  return RUNTIME_MODEL_ALIASES.get(value) ?? value;
-}
 
 export function getAutomationModel(value) {
   return MODELS_BY_SLUG.get(value);

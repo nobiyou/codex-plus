@@ -1,6 +1,10 @@
 import { createRoot } from "react-dom/client";
 
-import { TaskEditor, type NewTaskEditorDraft } from "../../web/src/components/TaskEditor";
+import {
+  TaskEditor,
+  type NewTaskCreateOptions,
+  type NewTaskEditorDraft,
+} from "../../web/src/components/TaskEditor";
 import type { ActorIdentity, TaskDraft } from "../../web/src/types";
 
 const currentUser: ActorIdentity = {
@@ -22,44 +26,43 @@ const oldTodoDraft: NewTaskEditorDraft = {
   dueDate: "",
   recurrence: null,
   conversationMode: "new",
+  conversationThreadId: null,
   attachments: [],
+  relations: {
+    parentId: null,
+    relatedIds: [],
+    subIssueIds: [],
+  },
 };
 
-const currentThreadId = new URLSearchParams(window.location.search).get("mode") === "current"
-  ? "current-thread-123"
-  : undefined;
-
-function publishResult(draft: TaskDraft, threadId?: string) {
-  document.documentElement.dataset.result = encodeURIComponent(JSON.stringify({ draft, threadId: threadId ?? null }));
+function publishResult(draft: TaskDraft, createOptions?: NewTaskCreateOptions) {
+  document.documentElement.dataset.result = encodeURIComponent(JSON.stringify({ draft, createOptions }));
 }
 
 createRoot(document.getElementById("root")!).render(
   <TaskEditor
     task={null}
+    tasks={[]}
     initialStatus="in_progress"
     initialDraft={oldTodoDraft}
     labels={["回归证据"]}
     currentUser={currentUser}
     developmentScan={{ workspacePath: null, contexts: [] }}
     developmentScanLoading={false}
-    currentThreadId={currentThreadId}
+    recentConversations={[]}
+    onCreateLabel={async () => {}}
     onCancel={() => {}}
-    onSave={async (draft, _attachments, _inlineImages, threadId) => publishResult(draft, threadId)}
+    onSave={async (draft, _attachments, _inlineImages, createOptions) => publishResult(draft, createOptions)}
   />,
 );
 
 requestAnimationFrame(() => {
   requestAnimationFrame(() => {
     const createButton = [...document.querySelectorAll("button")]
-      .find((button) => button.textContent === "创建议题");
+      .find((button) => button.textContent === "Create issue");
     if (!(createButton instanceof HTMLButtonElement)) {
       document.documentElement.dataset.error = "create button not found";
       return;
-    }
-    if (currentThreadId) {
-      const currentOption = [...document.querySelectorAll("label")]
-        .find((label) => label.textContent?.includes("当前对话"));
-      (currentOption?.querySelector("input") as HTMLInputElement | null)?.click();
     }
     createButton.click();
   });

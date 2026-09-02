@@ -1,3 +1,4 @@
+import { signalProcessTree } from "../shared/process-tree.mjs";
 import { spawnCodexTurn } from "./ai-chat-process.mjs";
 import { ApiError } from "./database.mjs";
 
@@ -13,16 +14,6 @@ const STATUS_LABELS = {
   done: "完成",
   canceled: "取消",
 };
-
-function signalProcessGroup(child, signal) {
-  if (Number.isInteger(child?.pid)) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {}
-  }
-  child?.kill(signal);
-}
 
 export function isProjectSummaryDue(summary, now = Date.now()) {
   if (!summary.attemptedAt) return true;
@@ -159,7 +150,7 @@ export class ProjectSummaryService {
     this.closed = true;
     clearInterval(this.timer);
     const active = [...this.active.values()];
-    for (const entry of active) signalProcessGroup(entry.child, "SIGTERM");
+    for (const entry of active) signalProcessTree(entry.child, "SIGTERM");
     await Promise.allSettled(active.map((entry) => entry.promise));
   }
 }

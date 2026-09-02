@@ -107,6 +107,19 @@ test("the complete Linear-style workflow shares one ordered status source", () =
   assert.match(contextMenuSource, /TASK_STATUSES\.map\(\(status, index\) =>/);
 });
 
+test("new issues default to a new conversation and can select a current-project conversation", () => {
+  assert.match(editorSource, /export type NewTaskConversationMode = "new" \| "existing"/);
+  assert.match(editorSource, /initialDraft\?\.conversationMode \?\? "new"/);
+  assert.match(editorSource, /recentConversations\.map\(\(conversation\)/);
+  assert.match(editorSource, /conversationMode,/);
+  assert.match(editorSource, /conversationThreadId,/);
+  assert.match(appSource, /createRecentConversations/);
+  assert.match(appSource, /conversationMode === "existing"/);
+  assert.match(appSource, /bindTaskToConversation\(saved, conversation\)/);
+  assert.match(appSource, /bindPreparedCreatedThread/);
+  assert.match(appSource, /pendingCreatedThreadBindingsRef/);
+});
+
 test("review, blocked and canceled statuses round-trip through filter URLs", () => {
   const statuses = workflowStatuses();
   const selected = ["in_review", "blocked", "canceled"];
@@ -146,25 +159,22 @@ test("issues expose processing conversations without manual binding", () => {
   assert.doesNotMatch(appSource, /detail-thread-button/);
   assert.doesNotMatch(detailSource, /输入对话 ID|解除 Codex 对话绑定|>绑定</);
   assert.doesNotMatch(editorSource, /对话 ID|linkedThreadId/);
-  assert.match(detailSource, /currentTask\.threadId/);
+  assert.match(detailSource, /currentTask\.threadBinding \|\| currentTask\.legacyLocalThreadId/);
   assert.doesNotMatch(detailSource, /currentTask\.threadIds/);
-  assert.match(detailSource, /<strong>查看对话<\/strong>/);
+  assert.match(detailSource, /<strong>\{text\("查看对话", "View conversation"\)\}<\/strong>/);
   assert.match(detailSource, /className="conversation-thread-id">\{threadId\}/);
   assert.doesNotMatch(detailSource, /shortThreadId/);
   assert.doesNotMatch(detailSource, /detail-property-label">Codex/);
-  assert.match(detailSource, /comment\.threadId/);
-  assert.match(detailSource, /threadId=\{comment\.threadId\}/);
+  assert.match(detailSource, /comment\.threadBinding \|\| comment\.legacyLocalThreadId/);
+  assert.match(detailSource, /onOpenLegacyLocalThread\(comment\.legacyLocalThreadId!\)/);
   assert.doesNotMatch(detailSource, /compact/);
   assert.doesNotMatch(styles, /issue-conversation-link\.compact/);
-  assert.match(detailSource, /代码分支/);
-  assert.match(detailSource, /Worktree/);
+  assert.match(detailSource, /\.\.\.developmentOptions\.map\(\(context\) => \(\{/);
+  assert.match(detailSource, /context\.type === "branch" \? "branch" : "folder"/);
   assert.match(detailSource, /developmentContext/);
   assert.doesNotMatch(detailSource, /placeholder="绑定分支/);
   assert.doesNotMatch(contextMenuSource, /打开关联 Codex 对话/);
   assert.match(contextMenuSource, /onOpenInThread/);
-  assert.match(appSource, /preferredTaskThreadId\(task\)/);
-  assert.match(appSource, /preferredTaskThreadId,/);
-  assert.match(appSource, /status === "in_progress" && !preferredTaskThreadId\(task\)/);
 });
 
 test("issue editing leaves workflow configuration on the project workflow board", () => {
@@ -189,8 +199,9 @@ test("comments stage, upload, render and delete their own attachments", () => {
   assert.match(apiSource, /export async function uploadCommentAttachment/);
   assert.match(apiSource, /\/api\/comments\/\$\{encodeURIComponent\(commentId\)\}\/attachments/);
   assert.match(detailSource, /pendingCommentFiles/);
-  assert.match(detailSource, /uploadCommentAttachment\(comment\.id, file\)/);
-  assert.match(detailSource, /comment\.attachments[\s\S]*?\.filter\([\s\S]*?\.map\(\(attachment\) =>/);
+  assert.match(detailSource, /uploadCommentAttachment\(comment\.id, file, "attachment"\)/);
+  assert.match(detailSource, /comment\.attachments\.some\(\(attachment\) => attachment\.kind === "attachment"\)/);
+  assert.match(detailSource, /comment\.attachments[\s\S]*?\.filter\(\(attachment\) => attachment\.kind === "attachment"\)[\s\S]*?\.map\(\(attachment\) =>/);
   assert.match(detailSource, /setPendingAttachmentDelete\(attachment\)/);
 });
 

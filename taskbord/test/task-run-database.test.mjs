@@ -257,6 +257,7 @@ test("deleting a task cascades task runs and their normalized events", async () 
       kind: "provider.event",
       source: "codex",
       content: "Visible output",
+      createdAt: "2026-09-01T10:00:02.000Z",
     });
 
     fixture.database.database.prepare("DELETE FROM tasks WHERE id = ?").run(fixture.task.id);

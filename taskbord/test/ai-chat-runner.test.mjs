@@ -18,10 +18,6 @@ async function waitFor(predicate, timeout = 10_000) {
   throw new Error("Timed out waiting for condition");
 }
 
-function configArg(key, value) {
-  return process.platform === "win32" ? `${key}=${value}` : `${key}="${value}"`;
-}
-
 test("normalized item events retain a bounded public item id", () => {
   const itemId = "x".repeat(70_000);
   const normalized = normalizeCodexEvent({
@@ -37,6 +33,42 @@ test("normalized item events retain a bounded public item id", () => {
   assert.equal(normalized.data.itemId, itemId.slice(0, 65_536));
 });
 
+test("completed item errors are warnings while failed item errors remain errors", () => {
+  const completed = normalizeCodexEvent({
+    type: "item.completed",
+    item: {
+      id: "notice",
+      type: "error",
+      status: "completed",
+      message: "Skill descriptions were shortened",
+    },
+  });
+  const failed = normalizeCodexEvent({
+    type: "item.completed",
+    item: {
+      id: "failure",
+      type: "error",
+      status: "failed",
+      message: "Tool failed",
+    },
+  });
+
+  assert.deepEqual(completed, {
+    kind: "event",
+    type: "error",
+    role: "activity",
+    content: "Skill descriptions were shortened",
+    data: { status: "warning", itemId: "notice" },
+  });
+  assert.deepEqual(failed, {
+    kind: "event",
+    type: "error",
+    role: "error",
+    content: "Tool failed",
+    data: { status: "failed", itemId: "failure" },
+  });
+});
+
 async function createFixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), "taskboard-ai-runner-"));
   const workspacePath = path.join(directory, "workspace");
@@ -49,6 +81,7 @@ async function createFixture() {
   const capturePath = path.join(directory, "capture.jsonl");
   const environmentCapturePath = path.join(directory, "environment-capture.jsonl");
   const descendantPath = path.join(directory, "descendant-alive");
+  const descendantDelayMs = process.platform === "win32" ? 1_500 : 300;
   const executable = path.join(directory, "fake-codex.mjs");
   await writeFile(executable, `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
@@ -96,7 +129,7 @@ if (args[0] === "app-server") {
     if (prompt.includes("MALFORMED_STUBBORN") || prompt.includes("CALLBACK_FATAL_STUBBORN")) {
       spawn(process.execPath, [
         "-e",
-        'process.on("SIGTERM", () => {}); setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), 1000); setInterval(() => {}, 1000)',
+        'process.on("SIGTERM", () => {}); setTimeout(() => require("node:fs").writeFileSync(process.env.FAKE_DESCENDANT_PATH, "alive"), ${descendantDelayMs}); setInterval(() => {}, 1000)',
       ], {env:process.env,stdio:"ignore"});
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
@@ -114,6 +147,9 @@ if (args[0] === "app-server") {
     emit({type:"item.completed",item:{type:"reasoning",text:"SECRET REASONING"}});
     emit({type:"item.completed",item:{type:"agent_message",text:"Visible answer"}});
     emit({type:"item.completed",item:{type:"command_execution",command:"npm test",status:"completed",exit_code:0,aggregated_output:"ok"}});
+    if (prompt.includes("LARGE_COMMAND_OUTPUT")) {
+      emit({type:"item.completed",item:{type:"command_execution",command:"large output",status:"completed",exit_code:0,aggregated_output:"x".repeat(1_048_577)}});
+    }
     if (prompt.includes("TURN_FAILED_ZERO")) {
       emit({type:"turn.failed",error:{message:"Protocol turn failed"}});
       return;
@@ -121,6 +157,9 @@ if (args[0] === "app-server") {
     if (prompt.includes("ROOT_ERROR_ZERO")) {
       emit({type:"error",message:"Protocol root error"});
       return;
+    }
+    if (prompt.includes("WARNING_THEN_COMPLETED")) {
+      emit({type:"error",message:"Skill descriptions were shortened"});
     }
     if (prompt.includes("NO_TERMINAL")) return;
     if (prompt.includes("ITEM_ERROR")) {
@@ -137,12 +176,6 @@ if (args[0] === "app-server") {
 }
 `);
   await chmod(executable, 0o755);
-  const codexExecutable = process.platform === "win32"
-    ? path.join(directory, "fake-codex.cmd")
-    : executable;
-  if (process.platform === "win32") {
-    await writeFile(codexExecutable, `@echo off\r\n"${process.execPath}" "%~dp0fake-codex.mjs" %*\r\n`);
-  }
 
   const codexStatePath = path.join(directory, "codex-state.json");
   await writeFile(codexStatePath, JSON.stringify({
@@ -157,7 +190,7 @@ if (args[0] === "app-server") {
   database.createProject({ id: "other", name: "Other", workspacePath: null });
   const service = new AiChatService({
     database,
-    codexExecutable,
+    codexExecutable: executable,
     codexStatePath,
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
     processEnv: {
@@ -176,11 +209,11 @@ if (args[0] === "app-server") {
     capturePath,
     database,
     databasePath,
+    descendantDelayMs,
     descendantPath,
     directory,
     environmentCapturePath,
     otherWorkspace,
-    codexExecutable,
     service,
     workspace,
     async close() {
@@ -237,11 +270,11 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       "exec", "--json", "--color", "never",
       "-C", fixture.workspace,
       "-s", "workspace-write",
-      "-c", configArg("approval_policy", "on-request"),
-      "-c", configArg("approvals_reviewer", "auto_review"),
+      "-c", 'approval_policy="on-request"',
+      "-c", 'approvals_reviewer="auto_review"',
       "--add-dir", fixture.otherWorkspace,
       "-m", "gpt-real",
-      "-c", configArg("model_reasoning_effort", "high"),
+      "-c", 'model_reasoning_effort="high"',
       "-",
     ]);
     assert.equal(captures[0].args.join(" ").includes("HIDDEN_SENTINEL"), false);
@@ -254,11 +287,11 @@ test("Codex turns use stdin, explicit resume ids, server-owned cwd and sanitized
       "exec", "--json", "--color", "never",
       "-C", fixture.workspace,
       "-s", "workspace-write",
-      "-c", configArg("approval_policy", "on-request"),
-      "-c", configArg("approvals_reviewer", "auto_review"),
+      "-c", 'approval_policy="on-request"',
+      "-c", 'approvals_reviewer="auto_review"',
       "--add-dir", fixture.otherWorkspace,
       "-m", "gpt-real",
-      "-c", configArg("model_reasoning_effort", "high"),
+      "-c", 'model_reasoning_effort="high"',
       "resume", "codex-thread-1", "-",
     ]);
     assert.equal(captures[1].args.includes("--last"), false);
@@ -295,10 +328,7 @@ test("same-thread turns are locked, different threads run concurrently, failures
     await waitFor(() => fixture.service.getRun(parallel.id)?.status === "completed");
     const interrupted = await fixture.service.interrupt(waiting.id);
     assert.equal(interrupted.id, waiting.id);
-    await waitFor(
-      () => fixture.service.getRun(waiting.id)?.status === "interrupted",
-      process.platform === "win32" ? 10_000 : 4_000,
-    );
+    await waitFor(() => fixture.service.getRun(waiting.id)?.status === "interrupted");
 
     const failed = await fixture.service.startTurn(firstThread.id, { message: "FAIL" });
     await waitFor(() => fixture.service.getRun(failed.id)?.status === "failed");
@@ -345,12 +375,9 @@ test("parser and event callback failures kill a SIGTERM-resistant process group"
       await rm(fixture.descendantPath, { force: true });
       const thread = await fixture.service.createThread({ projectId: "project" });
       const run = await fixture.service.startTurn(thread.id, { message });
-      await waitFor(
-        () => fixture.service.getRun(run.id).status === "failed",
-        process.platform === "win32" ? 3_000 : 700,
-      );
+      await waitFor(() => fixture.service.getRun(run.id).status === "failed");
       assert.equal(fixture.service.getRun(run.id).error, expectedError);
-      await new Promise((resolve) => setTimeout(resolve, process.platform === "win32" ? 1_100 : 350));
+      await new Promise((resolve) => setTimeout(resolve, fixture.descendantDelayMs + 50));
       await assert.rejects(readFile(fixture.descendantPath), (error) => error.code === "ENOENT");
     }
   } finally {
@@ -366,12 +393,63 @@ test("protocol terminal events determine run success and item errors remain non-
       ["ROOT_ERROR_ZERO", "failed"],
       ["NO_TERMINAL", "failed"],
       ["ITEM_ERROR", "completed"],
+      ["WARNING_THEN_COMPLETED", "completed"],
     ]) {
       const thread = await fixture.service.createThread({ projectId: "project" });
       const run = await fixture.service.startTurn(thread.id, { message });
       await waitFor(() => fixture.service.getRun(run.id).status !== "running");
       assert.equal(fixture.service.getRun(run.id).status, expectedStatus, message);
     }
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a root Codex error remains the run diagnostic when completion never arrives", async () => {
+  const fixture = await createFixture();
+  try {
+    const thread = await fixture.service.createThread({ projectId: "project" });
+    const run = await fixture.service.startTurn(thread.id, { message: "ROOT_ERROR_ZERO" });
+    await waitFor(() => fixture.service.getRun(run.id)?.status !== "running");
+
+    const finished = fixture.service.getRun(run.id);
+    assert.equal(finished.status, "failed");
+    assert.equal(finished.error, "Protocol root error");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a root Codex error preceding completion is recorded as a warning", async () => {
+  const fixture = await createFixture();
+  try {
+    const thread = await fixture.service.createThread({ projectId: "project" });
+    const run = await fixture.service.startTurn(thread.id, { message: "WARNING_THEN_COMPLETED" });
+    await waitFor(() => fixture.service.getRun(run.id)?.status !== "running");
+
+    const warning = fixture.service.getThreadSnapshot(thread.id).events.find(
+      (event) => event.type === "error" && event.content === "Skill descriptions were shortened",
+    );
+    assert.equal(fixture.service.getRun(run.id).status, "completed");
+    assert.equal(warning?.role, "activity");
+    assert.equal(warning?.data.status, "warning");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a Codex command event slightly over one MiB completes and keeps only bounded output", async () => {
+  const fixture = await createFixture();
+  try {
+    const thread = await fixture.service.createThread({ projectId: "project" });
+    const run = await fixture.service.startTurn(thread.id, { message: "LARGE_COMMAND_OUTPUT" });
+    await waitFor(() => fixture.service.getRun(run.id)?.status !== "running");
+
+    assert.equal(fixture.service.getRun(run.id).status, "completed");
+    const largeOutputEvent = fixture.service.getThreadSnapshot(thread.id).events.find(
+      (event) => event.type === "command_execution" && event.content === "large output",
+    );
+    assert.equal(largeOutputEvent.data.output.length, 65_536);
   } finally {
     await fixture.close();
   }
@@ -436,7 +514,7 @@ test("startup marks abandoned runs interrupted while preserving the Codex thread
   fixture.database = new TaskboardDatabase(fixture.databasePath);
   const restarted = new AiChatService({
     database: fixture.database,
-    codexExecutable: fixture.codexExecutable,
+    codexExecutable: path.join(fixture.directory, "fake-codex.mjs"),
     codexStatePath: path.join(fixture.directory, "codex-state.json"),
     manageTaskboardSkillPath: "/fixture/manage-taskboard/SKILL.md",
   });

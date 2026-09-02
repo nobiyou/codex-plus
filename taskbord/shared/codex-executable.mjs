@@ -2,33 +2,45 @@ import { accessSync, constants } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-function executableFile(candidate, platform = process.platform) {
+function executableFile(candidate) {
   try {
-    accessSync(candidate, platform === "win32" ? constants.F_OK : constants.X_OK);
+    accessSync(candidate, constants.X_OK);
     return candidate;
   } catch {
     return null;
   }
 }
 
-function executableOnPath(env, platform = process.platform) {
-  const names = platform === "win32"
-    ? ["codex.exe", "codex.cmd", "codex.bat", "codex"]
-    : ["codex"];
-  const directories = (env.PATH || "").split(path.delimiter).filter(Boolean);
-  for (const name of names) {
-    for (const directory of directories) {
-      const candidate = executableFile(path.join(directory, name), platform);
-      if (candidate) return candidate;
+function executableOnPath(env, platform) {
+  for (const directory of (env.PATH || "").split(path.delimiter)) {
+    if (!directory) continue;
+    if (platform === "win32") {
+      const nativeExecutable = executableFile(path.join(directory, "codex.exe"));
+      if (nativeExecutable) return nativeExecutable;
+
+      const npmEntry = executableFile(path.join(
+        directory,
+        "node_modules",
+        "@openai",
+        "codex",
+        "bin",
+        "codex.js",
+      ));
+      if (npmEntry) return npmEntry;
+      continue;
     }
+
+    const executable = executableFile(path.join(directory, "codex"));
+    if (executable) return executable;
   }
   return null;
 }
 
 export function codexExecutableInApp(appPath, platform = process.platform) {
-  return platform === "win32"
-    ? path.join(appPath, "resources", "codex.exe")
-    : path.join(appPath, "Contents", "Resources", "codex");
+  if (platform === "win32") {
+    return path.win32.join(path.win32.dirname(appPath), "resources", "codex.exe");
+  }
+  return path.join(appPath, "Contents", "Resources", "codex");
 }
 
 export function resolveCodexExecutable({
@@ -41,7 +53,7 @@ export function resolveCodexExecutable({
   if (typeof explicit === "string" && explicit.trim()) return explicit.trim();
 
   if (appPath) {
-    const bundled = executableFile(codexExecutableInApp(appPath, platform), platform);
+    const bundled = executableFile(codexExecutableInApp(appPath, platform));
     if (bundled) return bundled;
   }
 
@@ -54,7 +66,7 @@ export function resolveCodexExecutable({
         const bundled = executableFile(codexExecutableInApp(
           path.join(applicationDirectory, applicationName),
           platform,
-        ), platform);
+        ));
         if (bundled) return bundled;
       }
     }

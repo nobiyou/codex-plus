@@ -16,7 +16,14 @@ import {
 export const SCHEMA_VERSION = 2;
 export const DEFAULT_API_URL = "http://127.0.0.1:47823";
 
-const BOOLEAN_OPTIONS = new Set(["json"]);
+const sourceRuntimeFile = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  ".data",
+  "launcher-runtime.json",
+);
+const BOOLEAN_OPTIONS = new Set(["json", "clear-binding-thread"]);
+const GLOBAL_OPTIONS = new Set(["runtime-file"]);
 
 const COMMAND_OPTIONS = new Map([
   ["project list", new Set(["json"])],
@@ -70,7 +77,18 @@ const COMMAND_OPTIONS = new Map([
       "json",
     ]),
   ],
-  ["issue move", new Set(["status", "thread-id", "if-version", "json"])],
+  ["issue move", new Set([
+    "status",
+    "thread-id",
+    "binding-thread-id",
+    "binding-codex-project-id",
+    "binding-codex-project-kind",
+    "binding-codex-host-id",
+    "binding-workspace-path",
+    "clear-binding-thread",
+    "if-version",
+    "json",
+  ])],
   ["issue archive", new Set(["thread-id", "if-version", "json"])],
   ["issue restore", new Set(["thread-id", "if-version", "json"])],
   ["issue relation", new Set(["type", "issue", "thread-id", "if-version", "json"])],
@@ -79,7 +97,7 @@ const COMMAND_OPTIONS = new Map([
   ["comment update", new Set(["body", "thread-id", "if-version", "json"])],
   ["comment delete", new Set(["thread-id", "if-version", "json"])],
   ["attachment download", new Set(["output", "json"])],
-  ["attachment upload", new Set(["file", "task", "comment", "content-type", "json"])],
+  ["attachment upload", new Set(["file", "task", "comment", "content-type", "kind", "json"])],
   ["context current", new Set(["cwd", "json"])],
 ]);
 
@@ -188,11 +206,14 @@ async function execute(parsed, overrides) {
   }
   validateOptions(parsed.options, allowedOptions);
 
-  const env = overrides.env ?? process.env;
+  const processEnv = overrides.env ?? process.env;
+  const env = parsed.options["runtime-file"] === undefined
+    ? processEnv
+    : { ...processEnv, CODEX_TASKBOARD_RUNTIME_FILE: parsed.options["runtime-file"] };
   const usesCompanionControl = command.startsWith("cloud ") || command === "project map";
   const api = createApiClient(overrides, {
     baseUrl: usesCompanionControl || env.CODEX_TASKBOARD_COMPANION_URL !== undefined
-      ? resolveCompanionUrl(env)
+      ? await resolveCompanionUrl(env, overrides)
       : await resolveTaskboardBaseUrl(env, overrides),
   });
   switch (command) {
@@ -387,7 +408,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
         size: Number(response.headers.get("content-length")) || bytes.byteLength,
       };
     },
-    async upload(pathname, { body, contentType, filename }) {
+    async upload(pathname, { body, contentType, filename, kind }) {
       let response;
       try {
         response = await fetchImplementation(resolveApiUrl(baseUrl, pathname), {
@@ -397,6 +418,7 @@ function createApiClient(overrides, { baseUrl: explicitBaseUrl } = {}) {
             "content-type": contentType,
             "x-taskboard-client": "taskctl",
             "x-taskboard-filename": encodeURIComponent(filename),
+            "x-taskboard-attachment-kind": kind,
           },
           body,
         });
@@ -480,6 +502,10 @@ async function uploadAttachment(api, options, overrides) {
   if (!contentType) {
     throw usageError("--content-type cannot be empty");
   }
+  const kind = options.kind ?? (contentType.startsWith("image/") ? "inline" : "attachment");
+  if (kind !== "inline" && kind !== "attachment") {
+    throw usageError("--kind must be inline or attachment");
+  }
 
   const body = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   const pathname = taskId
@@ -489,11 +515,13 @@ async function uploadAttachment(api, options, overrides) {
     body,
     contentType,
     filename,
+    kind,
   });
 
   return {
     attachment: payload.attachment ?? null,
     file: filePath,
+    kind,
     target: taskId
       ? { type: "task", id: taskId }
       : { type: "comment", id: commentId },
@@ -671,11 +699,61 @@ async function moveIssue(api, taskId, options, overrides) {
   const status = requiredOption(options, "status");
   assertStatus(status);
   const threadId = resolveThreadId(options, overrides);
+  const threadBinding = threadBindingFromOptions(options);
   return api.request("POST", `${taskPath(taskId)}/move`, {
     status,
     threadId,
+    ...optionalField("threadBinding", threadBinding),
     version: await resolveVersion(api, taskId, options["if-version"]),
   });
+}
+
+function threadBindingFromOptions(options) {
+  const fields = [
+    options["binding-thread-id"],
+    options["binding-codex-project-id"],
+    options["binding-codex-project-kind"],
+    options["binding-codex-host-id"],
+    options["binding-workspace-path"],
+  ];
+  if (options["clear-binding-thread"]) {
+    if (fields.some((field) => field !== undefined)) {
+      throw usageError("--clear-binding-thread cannot be combined with binding identity options");
+    }
+    return null;
+  }
+  if (fields.every((field) => field === undefined)) return undefined;
+  const threadId = requiredOption(options, "binding-thread-id").trim();
+  if (!threadId || threadId.length > 256) {
+    throw usageError("--binding-thread-id must contain 1 to 256 characters");
+  }
+  const identityFields = fields.slice(1);
+  if (identityFields.every((field) => field === undefined)) return { threadId };
+  if (identityFields.some((field) => field === undefined)) {
+    throw usageError("Binding identity requires project id, kind, host id, and workspace path");
+  }
+  const codexProjectId = options["binding-codex-project-id"].trim();
+  const codexProjectKind = options["binding-codex-project-kind"];
+  const codexHostId = options["binding-codex-host-id"].trim();
+  const workspacePath = options["binding-workspace-path"];
+  if (!codexProjectId || codexProjectId.length > 256) {
+    throw usageError("--binding-codex-project-id must contain 1 to 256 characters");
+  }
+  if (codexProjectKind !== "local" && codexProjectKind !== "remote") {
+    throw usageError("--binding-codex-project-kind must be local or remote");
+  }
+  if (
+    !codexHostId
+    || codexHostId.length > 256
+    || (codexProjectKind === "local" && codexHostId !== "local")
+    || (codexProjectKind === "remote" && codexHostId === "local")
+  ) {
+    throw usageError("--binding-codex-host-id does not match the project kind");
+  }
+  if (!path.posix.isAbsolute(workspacePath) && !path.win32.isAbsolute(workspacePath)) {
+    throw usageError("--binding-workspace-path must be absolute");
+  }
+  return { threadId, codexProjectId, codexProjectKind, codexHostId, workspacePath };
 }
 
 async function archiveIssue(api, taskId, options, overrides, action) {
@@ -838,7 +916,7 @@ function optionalField(name, value) {
 
 function validateOptions(options, allowedOptions) {
   for (const name of Object.keys(options)) {
-    if (!allowedOptions.has(name)) {
+    if (!allowedOptions.has(name) && !GLOBAL_OPTIONS.has(name)) {
       throw usageError(`Unknown option --${name}`);
     }
   }
@@ -914,13 +992,18 @@ function resolveApiUrl(baseUrl, pathname) {
 
 async function resolveTaskboardBaseUrl(env, overrides) {
   if (env.CODEX_TASKBOARD_URL !== undefined) return env.CODEX_TASKBOARD_URL;
-  const descriptorPath = env.CODEX_TASKBOARD_RUNTIME_FILE;
-  if (!descriptorPath) return DEFAULT_API_URL;
+  const configuredDescriptorPath = env.CODEX_TASKBOARD_RUNTIME_FILE;
+  const descriptorPath = configuredDescriptorPath ?? sourceRuntimeFile;
   let descriptor;
   try {
-    const read = overrides.readFile ?? readFile;
+    const read = configuredDescriptorPath === undefined
+      ? readFile
+      : (overrides.readFile ?? readFile);
     descriptor = JSON.parse(await read(descriptorPath, "utf8"));
   } catch (error) {
+    if (configuredDescriptorPath === undefined && error?.code === "ENOENT") {
+      return DEFAULT_API_URL;
+    }
     throw new TaskctlError("Cannot read the active Taskboard launcher endpoint", {
       code: "SERVICE_UNAVAILABLE",
       exitCode: 3,
@@ -936,10 +1019,10 @@ async function resolveTaskboardBaseUrl(env, overrides) {
   return descriptor.url;
 }
 
-function resolveCompanionUrl(env) {
-  const rawUrl = env.CODEX_TASKBOARD_COMPANION_URL
-    ?? env.CODEX_TASKBOARD_URL
-    ?? DEFAULT_API_URL;
+async function resolveCompanionUrl(env, overrides) {
+  const rawUrl = env.CODEX_TASKBOARD_COMPANION_URL !== undefined
+    ? env.CODEX_TASKBOARD_COMPANION_URL
+    : await resolveTaskboardBaseUrl(env, overrides);
   let url;
   try {
     url = new URL(rawUrl);
@@ -949,18 +1032,21 @@ function resolveCompanionUrl(env) {
   const isLoopback = url.hostname === "localhost"
     || url.hostname === "127.0.0.1"
     || url.hostname === "[::1]";
+  const instanceToken = url.pathname.replace(/^\//, "").replace(/\/$/, "");
+  const hasValidPathname = url.pathname === "/"
+    || (/^[a-z0-9-]{16,128}$/i.test(instanceToken) && !instanceToken.includes("/"));
   if (
     !isLoopback
     || (url.protocol !== "http:" && url.protocol !== "https:")
     || url.username
     || url.password
-    || (url.pathname !== "/" && url.pathname !== "")
+    || !hasValidPathname
     || url.search
     || url.hash
   ) {
-    throw usageError("Local companion URL must be a loopback HTTP or HTTPS origin");
+    throw usageError("Local companion URL must be a loopback HTTP or HTTPS endpoint");
   }
-  return url.origin;
+  return url.toString().replace(/\/$/, "");
 }
 
 async function readResponse(response) {

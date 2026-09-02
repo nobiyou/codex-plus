@@ -119,31 +119,6 @@ test("launcher mode proves service identity and hides every route behind its ins
   });
   assert.equal(launcherApi.response.status, 200);
   assert.equal(launcherApi.response.headers.get("access-control-allow-origin"), "null");
-
-  const embeddedStatic = await fetch(`${baseUrl}/${instanceToken}/`, {
-    headers: {
-      origin: "app://-",
-      "x-codex-taskboard-challenge": challenge,
-    },
-  });
-  assert.equal(embeddedStatic.status, 200);
-  assert.equal(
-    embeddedStatic.headers.get("x-codex-taskboard-proof"),
-    createHmac("sha256", instanceSecret).update(challenge).digest("hex"),
-  );
-
-  const embeddedApiWithoutChallenge = await fetch(
-    `${baseUrl}/${instanceToken}/api/projects`,
-    { headers: { origin: "app://-" } },
-  );
-  assert.equal(embeddedApiWithoutChallenge.status, 401);
-
-  const embeddedApiWithQueryChallenge = await request(
-    baseUrl,
-    `/${instanceToken}/api/projects?__codex_taskboard_challenge=${challenge}`,
-    { headers: { origin: "app://-" } },
-  );
-  assert.equal(embeddedApiWithQueryChallenge.response.status, 200);
 });
 
 test("workflow workspaces persist centrally with optimistic concurrency", async () => {
@@ -768,52 +743,28 @@ test("workflow capabilities come from the live Codex skill and MCP catalogs", as
   let workspacePath;
   const baseUrl = await startServer(async (directory) => {
     workspacePath = directory;
-    const fixtureScript = path.join(directory, "fake-codex.mjs");
-    await writeFile(fixtureScript, `
-if (process.argv[2] === "mcp") {
-  console.log(JSON.stringify([
-    { name: "context7", enabled: true, transport: { type: "streamable_http" } },
-    { name: "disabled-server", enabled: false, transport: { type: "stdio" } },
-  ]));
+    const codexExecutable = path.join(directory, "fake-codex.mjs");
+    await writeFile(codexExecutable, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args[0] === "mcp") {
+  process.stdout.write('[{"name":"context7","enabled":true,"transport":{"type":"streamable_http"}},{"name":"disabled-server","enabled":false,"transport":{"type":"stdio"}}]\\n');
   process.exit(0);
 }
-let input = "";
 process.stdin.setEncoding("utf8");
-function flush() {
-  const lines = input.split(/\\r?\\n/);
-  input = lines.pop() ?? "";
-  for (const line of lines) {
-    if (line.includes('"id":1')) {
-      console.log(JSON.stringify({ id: 1, result: { platformFamily: "unix" } }));
-    } else if (line.includes('"id":2')) {
-      console.log(JSON.stringify({ id: 2, result: { data: [{
-        cwd: "workspace",
-        skills: [
-          { name: "user-skill", description: "User skill", path: "/user/skills/user-skill/SKILL.md", enabled: true, scope: "user", interface: null },
-          { name: "repo-skill", description: "Repository skill", path: "/workspace/.agents/skills/repo-skill/SKILL.md", enabled: true, scope: "repo", interface: { displayName: "Repository Skill" } },
-          { name: "user-skill", enabled: true, scope: "system", interface: { displayName: "Duplicate" } },
-          { name: "disabled-skill", enabled: false, scope: "user", interface: null },
-        ],
-        errors: [],
-      }] } }));
-    }
-  }
-}
+let buffer = "";
 process.stdin.on("data", (chunk) => {
-  input += chunk;
-  flush();
+  buffer += chunk;
+  let newlineIndex = buffer.indexOf("\\n");
+  while (newlineIndex >= 0) {
+    const line = buffer.slice(0, newlineIndex);
+    buffer = buffer.slice(newlineIndex + 1);
+    const message = JSON.parse(line);
+    if (message.id === 1) process.stdout.write('{"id":1,"result":{"platformFamily":"unix"}}\\n');
+    if (message.id === 2) process.stdout.write('{"id":2,"result":{"data":[{"cwd":"workspace","skills":[{"name":"user-skill","description":"User skill","path":"/user/skills/user-skill/SKILL.md","enabled":true,"scope":"user","interface":null},{"name":"repo-skill","description":"Repository skill","path":"/workspace/.agents/skills/repo-skill/SKILL.md","enabled":true,"scope":"repo","interface":{"displayName":"Repository Skill"}},{"name":"user-skill","enabled":true,"scope":"system","interface":{"displayName":"Duplicate"}},{"name":"disabled-skill","enabled":false,"scope":"user","interface":null}],"errors":[]}]}}\\n');
+    newlineIndex = buffer.indexOf("\\n");
+  }
 });
 `);
-    const codexExecutable = path.join(
-      directory,
-      process.platform === "win32" ? "fake-codex.cmd" : "fake-codex",
-    );
-    await writeFile(
-      codexExecutable,
-      process.platform === "win32"
-        ? `@echo off\r\nnode "%~dp0fake-codex.mjs" %*\r\n`
-        : `#!/bin/sh\nexec node "$(dirname "$0")/fake-codex.mjs" "$@"\n`,
-    );
     await chmod(codexExecutable, 0o755);
     return { codexExecutable };
   });
@@ -942,6 +893,15 @@ test("existing task and comment thread attribution remains content-specific", as
   const result = await request(baseUrl, "/api/tasks/legacy-task");
   assert.equal(result.response.status, 200);
   assert.equal(result.body.task.threadId, "legacy-thread");
+  assert.equal(result.body.task.threadBinding, null);
+  assert.equal(result.body.task.legacyLocalThreadId, "legacy-thread");
+  assert.deepEqual(result.body.task.conversationRefs.map((ref) => ({
+    threadId: ref.threadId,
+    legacyLocal: ref.legacyLocal,
+  })), [
+    { threadId: "legacy-thread", legacyLocal: true },
+    { threadId: "legacy-comment-thread", legacyLocal: true },
+  ]);
   assert.equal(result.body.task.creatorType, "agent");
   assert.equal(result.body.task.creatorId, "codex-agent");
   assert.equal(result.body.task.creatorName, "Codex Agent");
@@ -967,6 +927,8 @@ test("existing task and comment thread attribution remains content-specific", as
   assert.equal(taskThreads, undefined);
   const comments = await request(baseUrl, "/api/tasks/legacy-task/comments");
   assert.equal(comments.body.comments[0].threadId, "legacy-comment-thread");
+  assert.equal(comments.body.comments[0].threadBinding, null);
+  assert.equal(comments.body.comments[0].legacyLocalThreadId, "legacy-comment-thread");
   assert.equal(comments.body.comments[0].authorType, "agent");
   assert.equal(comments.body.comments[0].authorId, "codex-agent");
   assert.equal(comments.body.comments[0].authorName, "Codex Agent");
@@ -1246,7 +1208,6 @@ test("project usage reads matching Codex sessions and validates the range", asyn
   assert.equal(missingProject.response.status, 404);
   assert.equal(missingProject.body.error.code, "PROJECT_NOT_FOUND");
 });
-
 test("accepts private LAN requests and rejects public Host and Origin headers", async () => {
   const baseUrl = await startServer(undefined, { host: "0.0.0.0" });
 
@@ -1413,27 +1374,99 @@ test("moving a task updates its status and sort order", async () => {
   assert.equal(moveResult.body.task.version, 2);
 });
 
-test("tasks without a Codex conversation cannot enter in_progress", async () => {
+test("remote task bindings keep their own identity and can be cleared independently", async () => {
   const baseUrl = await startServer();
-  const createResult = await request(baseUrl, "/api/tasks", {
+  const legacy = (await request(baseUrl, "/api/tasks", {
     method: "POST",
-    body: { title: "Needs a conversation" },
-  });
-  const task = createResult.body.task;
+    body: { title: "Legacy binding", threadId: "legacy-thread" },
+  })).body.task;
+  assert.equal(legacy.threadId, "legacy-thread");
+  assert.equal(legacy.threadBinding, null);
+  assert.equal(legacy.legacyLocalThreadId, "legacy-thread");
+  assert.deepEqual(legacy.conversationRefs.map((ref) => ({
+    threadId: ref.threadId,
+    legacyLocal: ref.legacyLocal,
+  })), [{ threadId: "legacy-thread", legacyLocal: true }]);
+  const binding = {
+    threadId: "remote-thread-a",
+    codexProjectId: "remote-project-a",
+    codexProjectKind: "remote",
+    codexHostId: "ssh-a",
+    workspacePath: "/same/remote/path",
+  };
+  const created = (await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Remote binding", threadId: binding.threadId, threadBinding: binding },
+  })).body.task;
+  assert.deepEqual(created.threadBinding, binding);
+  assert.deepEqual(created.conversationRefs.map((ref) => ref.codexHostId), ["ssh-a"]);
 
-  const moveResult = await request(baseUrl, `/api/tasks/${task.id}/move`, {
+  const controllerComment = (await request(baseUrl, `/api/tasks/${created.id}/comments`, {
     method: "POST",
-    body: { version: task.version, status: "in_progress" },
-  });
-  assert.equal(moveResult.response.status, 409);
-  assert.equal(moveResult.body.error.code, "TASK_THREAD_REQUIRED");
+    body: { body: "Controller note", threadId: "controller-thread" },
+  })).body.comment;
+  assert.equal(controllerComment.threadBinding, null);
+  assert.equal(controllerComment.legacyLocalThreadId, "controller-thread");
 
-  const createProgressResult = await request(baseUrl, "/api/tasks", {
+  const blocked = (await request(baseUrl, `/api/tasks/${created.id}/move`, {
     method: "POST",
-    body: { title: "Cannot start unbound", status: "in_progress" },
+    body: {
+      version: created.version,
+      status: "blocked",
+      threadId: "controller-thread",
+      threadBinding: binding,
+    },
+  })).body.task;
+  assert.equal(blocked.threadId, binding.threadId);
+  assert.deepEqual(blocked.threadBinding, binding);
+  assert.deepEqual(blocked.conversationRefs.map((ref) => ({
+    threadId: ref.threadId,
+    legacyLocal: ref.legacyLocal ?? false,
+  })), [
+    { threadId: binding.threadId, legacyLocal: false },
+    { threadId: "controller-thread", legacyLocal: true },
+  ]);
+
+  const restored = (await request(baseUrl, `/api/tasks/${created.id}/move`, {
+    method: "POST",
+    body: {
+      version: blocked.version,
+      status: "todo",
+      threadId: "controller-thread",
+      threadBinding: null,
+    },
+  })).body.task;
+  assert.equal(restored.threadId, null);
+  assert.equal(restored.threadBinding, null);
+  assert.deepEqual(restored.conversationRefs.map((ref) => ref.threadId), ["controller-thread"]);
+});
+
+test("the active local Codex conversation supplies its exact task binding identity", async () => {
+  const baseUrl = await startServer();
+  const runtime = await request(baseUrl, "/api/local/host-runtime", {
+    method: "PUT",
+    body: {
+      threadId: "local-thread",
+      threadRunning: true,
+      threadTodoProgress: null,
+      codexProjectId: "local-project",
+      codexProjectKind: "local",
+      codexHostId: "local",
+      workspacePath: "/work/local-project",
+    },
   });
-  assert.equal(createProgressResult.response.status, 409);
-  assert.equal(createProgressResult.body.error.code, "TASK_THREAD_REQUIRED");
+  assert.equal(runtime.response.status, 200);
+  const task = (await request(baseUrl, "/api/tasks", {
+    method: "POST",
+    body: { title: "Local binding", threadId: "local-thread" },
+  })).body.task;
+  assert.deepEqual(task.threadBinding, {
+    threadId: "local-thread",
+    codexProjectId: "local-project",
+    codexProjectKind: "local",
+    codexHostId: "local",
+    workspacePath: "/work/local-project",
+  });
 });
 
 test("tasks can bind, change, and unbind one project workflow", async () => {
@@ -1484,7 +1517,7 @@ test("issues support parent, sub-issue, blocking, and related issue relationship
   const createIssue = async (title, status = "todo", projectId = "local") => {
     const result = await request(baseUrl, "/api/tasks", {
       method: "POST",
-    body: { projectId, title, status, ...(status === "in_progress" ? { threadId: "thread-relations" } : {}) },
+      body: { projectId, title, status },
     });
     assert.equal(result.response.status, 201);
     return result.body.task;
@@ -1639,7 +1672,7 @@ test("all task statuses are accepted, filtered, and listed in workflow order", a
   for (const status of statuses) {
     const createResult = await request(baseUrl, "/api/tasks", {
       method: "POST",
-      body: { title: status, status, ...(status === "in_progress" ? { threadId: "thread-statuses" } : {}) },
+      body: { title: status, status },
     });
     assert.equal(createResult.response.status, 201);
     assert.equal(createResult.body.task.status, status);
@@ -1929,6 +1962,7 @@ test("issue attachments can be uploaded, listed, opened, downloaded, and deleted
     headers: {
       "content-type": "text/plain; charset=utf-8",
       "x-taskboard-filename": encodeURIComponent("设计说明.txt"),
+      "x-taskboard-attachment-kind": "attachment",
     },
     body: contents,
   });
@@ -1960,6 +1994,7 @@ test("issue attachments can be uploaded, listed, opened, downloaded, and deleted
     headers: {
       "content-type": "text/html",
       "x-taskboard-filename": encodeURIComponent("page.html"),
+      "x-taskboard-attachment-kind": "attachment",
     },
     body: "<script>document.body.textContent = 'unsafe'</script>",
   });
@@ -1996,6 +2031,7 @@ test("permanent task deletion requires archiving and removes attachment files", 
     headers: {
       "content-type": "text/plain",
       "x-taskboard-filename": "evidence.txt",
+      "x-taskboard-attachment-kind": "attachment",
     },
     body: "attachment",
   });
@@ -2013,6 +2049,7 @@ test("permanent task deletion requires archiving and removes attachment files", 
       headers: {
         "content-type": "text/plain",
         "x-taskboard-filename": "comment-evidence.txt",
+        "x-taskboard-attachment-kind": "attachment",
       },
       body: "comment attachment",
     },
@@ -2081,6 +2118,7 @@ test("comments support attachments and deleting a comment removes its files", as
     headers: {
       "content-type": "text/plain",
       "x-taskboard-filename": encodeURIComponent("comment.txt"),
+      "x-taskboard-attachment-kind": "attachment",
     },
     body: contents,
   });
@@ -2123,6 +2161,7 @@ test("attachment uploads reject unsafe filenames", async () => {
     headers: {
       "content-type": "text/plain",
       "x-taskboard-filename": encodeURIComponent("../outside.txt"),
+      "x-taskboard-attachment-kind": "attachment",
     },
     body: "unsafe",
   });

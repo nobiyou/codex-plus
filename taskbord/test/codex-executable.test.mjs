@@ -1,52 +1,43 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import test from "node:test";
 
-import {
-  codexExecutableInApp,
-  resolveCodexExecutable,
-} from "../shared/codex-executable.mjs";
+import { resolveCodexExecutable } from "../shared/codex-executable.mjs";
+import { executableCommand } from "../shared/executable-command.mjs";
 
-test("Windows resolution prefers a real Codex executable over npm shell shims", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "codex-executable-"));
-  const npmDirectory = path.join(directory, "npm");
-  const appResources = path.join(directory, "app", "resources");
-  await mkdir(npmDirectory, { recursive: true });
-  await mkdir(appResources, { recursive: true });
-  await writeFile(path.join(npmDirectory, "codex.cmd"), "@echo off");
-  await writeFile(path.join(appResources, "codex.exe"), "binary");
+test("Windows PATH resolves the npm Codex shim to its Node entry", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "codex-executable-test-"));
   try {
-    assert.equal(
-      resolveCodexExecutable({
-        platform: "win32",
-        env: { PATH: [npmDirectory, appResources].join(path.delimiter) },
-      }),
-      path.join(appResources, "codex.exe"),
+    const npmEntry = path.join(
+      directory,
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
     );
-    assert.equal(
-      codexExecutableInApp(path.join(directory, "app"), "win32"),
-      path.join(appResources, "codex.exe"),
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
+    await mkdir(path.dirname(npmEntry), { recursive: true });
+    await Promise.all([
+      writeFile(path.join(directory, "codex"), "#!/bin/sh\n"),
+      writeFile(path.join(directory, "codex.cmd"), "@echo off\r\n"),
+      writeFile(npmEntry, ""),
+    ]);
 
-test("Windows resolution falls back to the npm cmd shim when no exe is installed", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "codex-executable-"));
-  const shim = path.join(directory, "codex.cmd");
-  await writeFile(shim, "@echo off");
-  try {
-    assert.equal(
-      resolveCodexExecutable({
-        platform: "win32",
-        env: { PATH: directory },
-      }),
-      shim,
-    );
+    const executable = resolveCodexExecutable({
+      explicit: "",
+      env: { PATH: directory },
+      platform: "win32",
+    });
+    assert.equal(executable, npmEntry);
+    assert.deepEqual(executableCommand(executable, ["debug", "models"]), {
+      executable: process.execPath,
+      args: [npmEntry, "debug", "models"],
+    });
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { force: true, recursive: true });
   }
 });

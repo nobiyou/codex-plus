@@ -8,10 +8,12 @@ import type {
   AiChatThreadSnapshot,
   Attachment,
   Comment,
+  CodexThreadBinding,
   CodexUsageSummary,
   DevelopmentScan,
   HostContext,
   IssueRelationType,
+  JiraConnection,
   Project,
   ProjectSummary,
   Task,
@@ -22,21 +24,6 @@ import type {
   WorkflowCapabilities,
   WorkflowWorkspaceRecord,
 } from "./types";
-import { getEmbeddedFrameChallenge } from "./embeddedHost.mjs";
-
-type TaskRequestDraft = TaskDraft & {
-  conversationMode?: string;
-  conversationThreadId?: string | null;
-};
-
-function taskRequestFields(draft: TaskRequestDraft): TaskDraft {
-  const {
-    conversationMode: _conversationMode,
-    conversationThreadId: _conversationThreadId,
-    ...taskDraft
-  } = draft;
-  return taskDraft;
-}
 
 const DEFAULT_USER_ACTOR: ActorIdentity = {
   type: "user",
@@ -46,9 +33,14 @@ const DEFAULT_USER_ACTOR: ActorIdentity = {
 };
 
 let currentUserActor = DEFAULT_USER_ACTOR;
+let apiText = (_chinese: string, english: string) => english;
 
 export function setCurrentUserActor(actor?: ActorIdentity) {
   currentUserActor = actor?.type === "user" ? actor : DEFAULT_USER_ACTOR;
+}
+
+export function setApiText(text: typeof apiText) {
+  apiText = text;
 }
 
 interface ApiErrorBody {
@@ -65,7 +57,7 @@ export class ApiError extends Error {
   readonly details?: unknown;
 
   constructor(status: number, body: ApiErrorBody) {
-    super(body.error?.message ?? `Request failed (${status})`);
+    super(body.error?.message ?? apiText(`请求失败（${status}）`, `Request failed (${status})`));
     this.name = "ApiError";
     this.status = status;
     this.code = body.error?.code ?? "REQUEST_FAILED";
@@ -74,18 +66,11 @@ export class ApiError extends Error {
 }
 
 export function resolveTaskboardUrl(path: string): string {
-  const url = new URL(path.replace(/^\//, ""), document.baseURI);
-  const challenge = getEmbeddedFrameChallenge();
-  if (challenge && url.pathname.endsWith("/api/events")) {
-    url.searchParams.set("__codex_taskboard_challenge", challenge);
-  }
-  return url.href;
+  return new URL(path.replace(/^\//, ""), document.baseURI).href;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  const embeddedChallenge = getEmbeddedFrameChallenge();
-  if (embeddedChallenge) headers.set("X-Codex-Taskboard-Challenge", embeddedChallenge);
   if (init?.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const method = (init?.method ?? "GET").toUpperCase();
   if (method !== "GET" && method !== "HEAD") {
@@ -96,17 +81,39 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
 
+  const readRequest = method === "GET" || method === "HEAD";
   let response: Response;
-  try {
-    response = await fetch(resolveTaskboardUrl(path), { ...init, headers });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw error;
-    throw new ApiError(0, {
-      error: {
-        code: "SERVICE_UNAVAILABLE",
-        message: "无法连接本地 Taskboard 服务，请重新通过 Taskboard 启动 Codex。",
-      },
-    });
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetch(resolveTaskboardUrl(path), { ...init, headers });
+      break;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      if (readRequest && attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+        continue;
+      }
+      const failure = error instanceof Error && error.name === "TimeoutError"
+        ? "timeout"
+        : error instanceof TypeError
+          ? "browser-network"
+          : "network";
+      throw new ApiError(0, {
+        error: {
+          code: readRequest ? "READ_FAILED" : "SERVICE_UNAVAILABLE",
+          message: readRequest
+            ? apiText(
+                "暂时无法读取 Taskboard 数据。面板会自动重试，请稍后再试。",
+                "Taskboard data is temporarily unavailable. The panel will retry automatically.",
+              )
+            : apiText(
+                "暂时无法连接 Taskboard 服务，请稍后重试。",
+                "The Taskboard service is temporarily unavailable. Try again later.",
+              ),
+          details: { method, failure },
+        },
+      });
+    }
   }
   let body: T & ApiErrorBody;
   try {
@@ -123,6 +130,50 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export async function listProjects(signal?: AbortSignal): Promise<Project[]> {
   const data = await request<{ projects: Project[] }>("/api/projects", { signal });
   return data.projects;
+}
+
+export async function getJiraConnection(signal?: AbortSignal): Promise<JiraConnection> {
+  try {
+    const data = await request<{ connection: JiraConnection }>("/api/local/jira-connection", { signal });
+    return data.connection;
+  } catch (error) {
+    if (
+      error instanceof ApiError
+      && (error.code === "LOCAL_COMPANION_REQUIRED" || error.status === 404)
+    ) {
+      return {
+        configured: false,
+        baseUrl: null,
+        username: null,
+        displayName: null,
+        projects: [],
+        projectId: "jira-my-tasks",
+        lastSyncedAt: null,
+        insecureHttp: false,
+      };
+    }
+    throw error;
+  }
+}
+
+export async function configureJiraConnection(input: {
+  baseUrl: string;
+  username: string;
+  password: string;
+  projects: string[];
+}): Promise<JiraConnection> {
+  const data = await request<{ connection: JiraConnection }>("/api/local/jira-connection", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+  return data.connection;
+}
+
+export async function syncJiraConnection(): Promise<JiraConnection> {
+  const data = await request<{ connection: JiraConnection }>("/api/local/jira-connection/sync", {
+    method: "POST",
+  });
+  return data.connection;
 }
 
 export async function getProjectSummary(
@@ -162,10 +213,33 @@ export async function getTaskboardRevision(
 export async function getHostRuntime(signal?: AbortSignal): Promise<HostContext | null> {
   const data = await request<{
     runtime: (Pick<HostContext, "threadId" | "threadRunning" | "threadTodoProgress"> & {
+      codexProjectId: string | null;
+      codexProjectKind: "local" | "remote" | null;
+      codexHostId: string | null;
+      workspacePath: string | null;
       updatedAt: number;
     }) | null;
   }>("/api/local/host-runtime", { signal });
-  return data.runtime;
+  if (!data.runtime) return null;
+  const { codexProjectId, codexProjectKind, codexHostId, workspacePath } = data.runtime;
+  return {
+    threadId: data.runtime.threadId,
+    threadRunning: data.runtime.threadRunning,
+    threadTodoProgress: data.runtime.threadTodoProgress,
+    ...(codexProjectId && codexProjectKind && codexHostId && workspacePath
+      ? {
+          projectId: codexProjectId,
+          workspacePath,
+          projects: [{
+            id: codexProjectId,
+            name: codexProjectId,
+            projectKind: codexProjectKind,
+            workspacePath,
+            hostId: codexHostId,
+          }],
+        }
+      : {}),
+  };
 }
 
 export async function getCodexThreadProgress(
@@ -186,12 +260,17 @@ export async function getCodexThreadProgress(
 
 export async function publishHostRuntime(context: HostContext): Promise<void> {
   if (!context.threadId || context.threadRunning === undefined) return;
+  const project = context.projects?.find((candidate) => candidate.id === context.projectId);
   await request("/api/local/host-runtime", {
     method: "PUT",
     body: JSON.stringify({
       threadId: context.threadId,
       threadRunning: context.threadRunning,
       threadTodoProgress: context.threadTodoProgress ?? null,
+      codexProjectId: project?.id ?? null,
+      codexProjectKind: project?.projectKind ?? null,
+      codexHostId: project?.hostId ?? null,
+      workspacePath: project?.workspacePath ?? null,
     }),
   });
 }
@@ -361,6 +440,28 @@ export async function createProject(input: {
   return data.project;
 }
 
+export async function createProjectLabel(projectId: string, label: string): Promise<Project> {
+  const data = await request<{ project: Project }>(
+    `/api/projects/${encodeURIComponent(projectId)}/labels`,
+    {
+      method: "POST",
+      body: JSON.stringify({ label }),
+    },
+  );
+  return data.project;
+}
+
+export async function deleteProjectLabel(projectId: string, label: string): Promise<Project> {
+  const data = await request<{ project: Project }>(
+    `/api/projects/${encodeURIComponent(projectId)}/labels`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ label }),
+    },
+  );
+  return data.project;
+}
+
 export async function deleteProject(projectId: string): Promise<void> {
   await request(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "DELETE",
@@ -399,22 +500,30 @@ export function listTasks(projectId: string, signal?: AbortSignal): Promise<Task
   return listTasksByArchive(projectId, "false", signal);
 }
 
+export async function getTask(taskId: string, signal?: AbortSignal): Promise<Task> {
+  const data = await request<{ task: Task }>(
+    `/api/tasks/${encodeURIComponent(taskId)}`,
+    { signal },
+  );
+  return data.task;
+}
+
 export function listArchivedTasks(projectId: string, signal?: AbortSignal): Promise<Task[]> {
   return listTasksByArchive(projectId, "true", signal);
 }
 
-export async function createTask(projectId: string, draft: TaskRequestDraft, threadId?: string): Promise<Task> {
+export async function createTask(projectId: string, draft: TaskDraft, threadId?: string): Promise<Task> {
   const data = await request<{ task: Task }>("/api/tasks", {
     method: "POST",
-    body: JSON.stringify({ projectId, ...taskRequestFields(draft), ...(threadId ? { threadId } : {}) }),
+    body: JSON.stringify({ projectId, ...draft, ...(threadId ? { threadId } : {}) }),
   });
   return data.task;
 }
 
-export async function updateTask(task: Task, draft: TaskRequestDraft, threadId?: string): Promise<Task> {
+export async function updateTask(task: Task, draft: TaskDraft, threadId?: string): Promise<Task> {
   const data = await request<{ task: Task }>(`/api/tasks/${encodeURIComponent(task.id)}`, {
     method: "PATCH",
-    body: JSON.stringify({ version: task.version, ...taskRequestFields(draft), ...(threadId ? { threadId } : {}) }),
+    body: JSON.stringify({ version: task.version, ...draft, ...(threadId ? { threadId } : {}) }),
   });
   return data.task;
 }
@@ -422,14 +531,21 @@ export async function updateTask(task: Task, draft: TaskRequestDraft, threadId?:
 export async function moveTask(
   task: Task,
   status: TaskStatus,
-  sortOrder: number,
+  sortOrder?: number,
+  threadBinding?: CodexThreadBinding | null,
   threadId?: string,
 ): Promise<Task> {
   const data = await request<{ task: Task }>(
     `/api/tasks/${encodeURIComponent(task.id)}/move`,
     {
       method: "POST",
-      body: JSON.stringify({ version: task.version, status, sortOrder, ...(threadId ? { threadId } : {}) }),
+      body: JSON.stringify({
+        version: task.version,
+        status,
+        ...(sortOrder === undefined ? {} : { sortOrder }),
+        ...(threadBinding === undefined ? {} : { threadBinding }),
+        ...(threadId ? { threadId } : {}),
+      }),
     },
   );
   return data.task;
@@ -513,12 +629,21 @@ export async function listTaskActivities(
   return data.activities;
 }
 
-export async function createComment(taskId: string, body: string, threadId?: string): Promise<Comment> {
+export async function createComment(
+  taskId: string,
+  body: string,
+  threadId?: string,
+  threadBinding?: CodexThreadBinding | null,
+): Promise<Comment> {
   const data = await request<{ comment: Comment }>(
     `/api/tasks/${encodeURIComponent(taskId)}/comments`,
     {
       method: "POST",
-      body: JSON.stringify({ body, ...(threadId ? { threadId } : {}) }),
+      body: JSON.stringify({
+        body,
+        ...(threadId ? { threadId } : {}),
+        ...(threadBinding === undefined ? {} : { threadBinding }),
+      }),
     },
   );
   return data.comment;
@@ -550,7 +675,11 @@ export async function listAttachments(taskId: string, signal?: AbortSignal): Pro
   return data.attachments;
 }
 
-export async function uploadAttachment(taskId: string, file: File): Promise<Attachment> {
+export async function uploadAttachment(
+  taskId: string,
+  file: File,
+  kind: Attachment["kind"],
+): Promise<Attachment> {
   const data = await request<{ attachment: Attachment }>(
     `/api/tasks/${encodeURIComponent(taskId)}/attachments`,
     {
@@ -558,6 +687,7 @@ export async function uploadAttachment(taskId: string, file: File): Promise<Atta
       headers: {
         "Content-Type": file.type || "application/octet-stream",
         "X-Taskboard-Filename": encodeURIComponent(file.name),
+        "X-Taskboard-Attachment-Kind": kind,
       },
       body: file,
     },
@@ -565,7 +695,11 @@ export async function uploadAttachment(taskId: string, file: File): Promise<Atta
   return data.attachment;
 }
 
-export async function uploadCommentAttachment(commentId: string, file: File): Promise<Attachment> {
+export async function uploadCommentAttachment(
+  commentId: string,
+  file: File,
+  kind: Attachment["kind"],
+): Promise<Attachment> {
   const data = await request<{ attachment: Attachment }>(
     `/api/comments/${encodeURIComponent(commentId)}/attachments`,
     {
@@ -573,6 +707,7 @@ export async function uploadCommentAttachment(commentId: string, file: File): Pr
       headers: {
         "Content-Type": file.type || "application/octet-stream",
         "X-Taskboard-Filename": encodeURIComponent(file.name),
+        "X-Taskboard-Attachment-Kind": kind,
       },
       body: file,
     },
@@ -608,8 +743,4 @@ export function resolvePersistedAttachmentUrl(value: string): string {
     return value;
   }
   return value;
-}
-
-export function markdownIncludesAttachment(markdown: string, attachment: Attachment): boolean {
-  return markdown.includes(`api/attachments/${encodeURIComponent(attachment.id)}/content`);
 }

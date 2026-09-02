@@ -85,10 +85,34 @@ function Write-CodexPlusTaskboardStateValue {
   Set-Content -LiteralPath $path -Value $Value -Encoding ASCII
 }
 
+function Write-CodexPlusTaskboardRuntimeDescriptor {
+  param(
+    [Parameter(Mandatory = $true)][string]$StateRoot,
+    [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][string]$InstanceToken
+  )
+
+  if ([string]::IsNullOrWhiteSpace($InstanceToken)) {
+    return
+  }
+
+  $descriptorUrl = $Url.TrimEnd('/') + "/" + $InstanceToken.Trim('/')
+  $descriptor = [ordered]@{
+    version = 1
+    url = $descriptorUrl
+  }
+  $json = $descriptor | ConvertTo-Json -Compress
+  $path = Get-CodexPlusTaskboardStateFilePath -StateRoot $StateRoot -Name "launcher-runtime.json"
+  $current = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+  if ([string]$current -ne ($json + [Environment]::NewLine)) {
+    Set-Content -LiteralPath $path -Value $json -Encoding ASCII
+  }
+}
+
 function Remove-CodexPlusTaskboardStateFiles {
   param([Parameter(Mandatory = $true)][string]$StateRoot)
 
-  foreach ($name in @("pid.txt", "root.txt", "port.txt", "url.txt", "node.txt", "owner.txt", "instance-token.txt", "instance-secret.txt", "stdout.log", "stderr.log")) {
+  foreach ($name in @("pid.txt", "root.txt", "port.txt", "url.txt", "node.txt", "owner.txt", "instance-token.txt", "instance-secret.txt", "launcher-runtime.json", "stdout.log", "stderr.log")) {
     $path = Get-CodexPlusTaskboardStateFilePath -StateRoot $StateRoot -Name $name
     if (Test-Path -LiteralPath $path) {
       Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -270,6 +294,30 @@ function Get-CodexPlusTaskboardProcessInfo {
   }
 }
 
+function Get-CodexPlusTaskboardListeningProcessIds {
+  param([int]$Port)
+
+  if (-not (Test-CodexPlusTaskboardPortValue -Port $Port)) {
+    return @()
+  }
+
+  try {
+    $connections = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop)
+  } catch {
+    return @()
+  }
+
+  $processIds = @()
+  foreach ($connection in $connections) {
+    $processId = ConvertTo-CodexPlusTaskboardInt -Value ([string]$connection.OwningProcess)
+    if ($null -ne $processId -and $processId -gt 0) {
+      $processIds += $processId
+    }
+  }
+
+  return @($processIds | Select-Object -Unique)
+}
+
 function Test-CodexPlusTaskboardProcessIdentity {
   param(
     $Process,
@@ -308,6 +356,38 @@ function Test-CodexPlusTaskboardProcessIdentity {
   return (Test-CodexPlusTaskboardCommandLineToken -CommandLine $commandLine -Token ("--codex-plus-taskboard-owner-marker={0}" -f $OwnerMarker))
 }
 
+function Get-CodexPlusTaskboardOwnedListeningProcess {
+  param(
+    [int]$Port,
+    [string]$Root,
+    [string]$NodePath,
+    [string]$OwnerMarker
+  )
+
+  foreach ($processId in @(Get-CodexPlusTaskboardListeningProcessIds -Port $Port)) {
+    $process = Get-CodexPlusTaskboardProcessInfo -ProcessId ([int]$processId)
+    if (Test-CodexPlusTaskboardProcessIdentity -Process $process -Root $Root -NodePath $NodePath -OwnerMarker $OwnerMarker) {
+      return $process
+    }
+  }
+
+  return $null
+}
+
+function Get-CodexPlusTaskboardHealthUrl {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [string]$InstanceToken
+  )
+
+  $baseUrl = $Url.TrimEnd('/')
+  if ([string]::IsNullOrWhiteSpace($InstanceToken)) {
+    return ($baseUrl + "/health")
+  }
+
+  return ($baseUrl + "/" + $InstanceToken.Trim('/') + "/health")
+}
+
 function Get-CodexPlusTaskboardRecordedProcessStatus {
   param([Parameter(Mandatory = $true)][string]$StateRoot)
 
@@ -315,20 +395,35 @@ function Get-CodexPlusTaskboardRecordedProcessStatus {
   $recordedNodePath = Resolve-CodexPlusTaskboardRecordedNodePath -StateRoot $StateRoot
   $recordedOwnerMarker = Resolve-CodexPlusTaskboardRecordedOwnerMarker -StateRoot $StateRoot
   $recordedProcessId = ConvertTo-CodexPlusTaskboardInt -Value (Read-CodexPlusTaskboardStateValue -StateRoot $StateRoot -Name "pid.txt")
-  $process = Get-CodexPlusTaskboardProcessInfo -ProcessId $recordedProcessId
-  if (-not (Test-CodexPlusTaskboardProcessIdentity -Process $process -Root $recordedRoot -NodePath $recordedNodePath -OwnerMarker $recordedOwnerMarker)) {
-    return $null
-  }
-
   $recordedPort = ConvertTo-CodexPlusTaskboardInt -Value (Read-CodexPlusTaskboardStateValue -StateRoot $StateRoot -Name "port.txt")
   if ($null -eq $recordedPort -or -not (Test-CodexPlusTaskboardPortValue -Port $recordedPort)) {
     $recordedPort = Get-CodexPlusTaskboardPort
   }
 
+  $process = Get-CodexPlusTaskboardProcessInfo -ProcessId $recordedProcessId
+  if (-not (Test-CodexPlusTaskboardProcessIdentity -Process $process -Root $recordedRoot -NodePath $recordedNodePath -OwnerMarker $recordedOwnerMarker)) {
+    $process = Get-CodexPlusTaskboardOwnedListeningProcess -Port $recordedPort -Root $recordedRoot -NodePath $recordedNodePath -OwnerMarker $recordedOwnerMarker
+    if ($null -eq $process) {
+      return $null
+    }
+
+    $recordedProcessId = [int]$process.ProcessId
+    try {
+      Write-CodexPlusTaskboardStateValue -StateRoot $StateRoot -Name "pid.txt" -Value ([string]$recordedProcessId)
+    } catch {
+      # Status remains usable even if a read-only state directory prevents repair.
+    }
+  }
+
   $recordedUrl = Get-CodexPlusTaskboardUrlForPort -Port $recordedPort
   $recordedInstanceToken = Resolve-CodexPlusTaskboardRecordedInstanceToken -StateRoot $StateRoot
   $recordedInstanceSecret = Resolve-CodexPlusTaskboardRecordedInstanceSecret -StateRoot $StateRoot
-  $healthy = Test-CodexPlusTaskboardHealth -Url $recordedUrl -InstanceSecret $recordedInstanceSecret
+  try {
+    Write-CodexPlusTaskboardRuntimeDescriptor -StateRoot $StateRoot -Url $recordedUrl -InstanceToken $recordedInstanceToken
+  } catch {
+    # Status remains usable when the state directory cannot be repaired.
+  }
+  $healthy = Test-CodexPlusTaskboardHealth -Url $recordedUrl -InstanceToken $recordedInstanceToken -InstanceSecret $recordedInstanceSecret
   $reason = "Taskboard server process exists but health check failed."
   if ($healthy) {
     $reason = "Taskboard server is healthy."
@@ -342,6 +437,7 @@ function Test-CodexPlusTaskboardHealth {
     [Parameter(Mandatory = $true)][string]$Url,
     [int]$TotalTimeoutMs = 2000,
     [Nullable[datetime]]$DeadlineUtc,
+    [string]$InstanceToken,
     [string]$InstanceSecret
   )
 
@@ -363,7 +459,8 @@ function Test-CodexPlusTaskboardHealth {
       $challenge = ([guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N"))
       $headers["x-codex-taskboard-challenge"] = $challenge
     }
-    $response = Invoke-WebRequest -Uri ($Url.TrimEnd('/') + "/health") -UseBasicParsing -Method Get -Headers $headers -TimeoutSec $requestTimeoutSec -ErrorAction Stop
+    $healthUrl = Get-CodexPlusTaskboardHealthUrl -Url $Url -InstanceToken $InstanceToken
+    $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -Method Get -Headers $headers -TimeoutSec $requestTimeoutSec -ErrorAction Stop
     if ($response.StatusCode -ne 200) {
       return $false
     }
@@ -654,13 +751,32 @@ function Get-CodexPlusTaskboardStatus {
   $process = Get-CodexPlusTaskboardProcessInfo -ProcessId $recordedProcessId
   $launcherOwned = Test-CodexPlusTaskboardProcessIdentity -Process $process -Root $effectiveRoot -NodePath $recordedNodePath -OwnerMarker $recordedOwnerMarker
   if (-not $launcherOwned) {
-    $process = $null
-    $recordedProcessId = $null
+    $process = Get-CodexPlusTaskboardOwnedListeningProcess -Port $effectivePort -Root $effectiveRoot -NodePath $recordedNodePath -OwnerMarker $recordedOwnerMarker
+    if ($null -ne $process) {
+      $launcherOwned = $true
+      $recordedProcessId = [int]$process.ProcessId
+      try {
+        Write-CodexPlusTaskboardStateValue -StateRoot $resolvedStateRoot -Name "pid.txt" -Value ([string]$recordedProcessId)
+      } catch {
+        # Keep reporting the live process when state repair is not writable.
+      }
+    } else {
+      $process = $null
+      $recordedProcessId = $null
+    }
+  }
+
+  if ($launcherOwned) {
+    try {
+      Write-CodexPlusTaskboardRuntimeDescriptor -StateRoot $resolvedStateRoot -Url $url -InstanceToken $recordedInstanceToken
+    } catch {
+      # Status remains usable when the state directory cannot be repaired.
+    }
   }
 
   $healthy = $false
   if ($launcherOwned) {
-    $healthy = Test-CodexPlusTaskboardHealth -Url $url -InstanceSecret $recordedInstanceSecret
+    $healthy = Test-CodexPlusTaskboardHealth -Url $url -InstanceToken $recordedInstanceToken -InstanceSecret $recordedInstanceSecret
   }
 
   if (-not $effectiveRoot) {
@@ -801,6 +917,7 @@ function Start-CodexPlusTaskboard {
     Write-CodexPlusTaskboardStateValue -StateRoot $resolvedStateRoot -Name "owner.txt" -Value $ownerMarker
     Write-CodexPlusTaskboardStateValue -StateRoot $resolvedStateRoot -Name "instance-token.txt" -Value $instanceToken
     Write-CodexPlusTaskboardStateValue -StateRoot $resolvedStateRoot -Name "instance-secret.txt" -Value $instanceSecret
+    Write-CodexPlusTaskboardRuntimeDescriptor -StateRoot $resolvedStateRoot -Url $url -InstanceToken $instanceToken
   } catch {
     Remove-CodexPlusTaskboardStateFiles -StateRoot $resolvedStateRoot
     throw "Taskboard state could not be prepared before launch: $($_.Exception.Message)"
@@ -874,7 +991,7 @@ function Start-CodexPlusTaskboard {
       break
     }
 
-    if (Test-CodexPlusTaskboardHealth -Url $url -TotalTimeoutMs 1000 -DeadlineUtc $startupDeadline -InstanceSecret $instanceSecret) {
+    if (Test-CodexPlusTaskboardHealth -Url $url -TotalTimeoutMs 1000 -DeadlineUtc $startupDeadline -InstanceToken $instanceToken -InstanceSecret $instanceSecret) {
       $healthy = $true
       break
     }

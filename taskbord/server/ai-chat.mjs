@@ -2,16 +2,16 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { signalProcessTree } from "../shared/process-tree.mjs";
 import { ApiError } from "./database.mjs";
 import { discoverAiCatalog, resolveAiWorkspace } from "./ai-chat-catalog.mjs";
 import {
+  closeCodexTurnControl,
   buildCodexArgs,
   buildCodexPrompt,
   normalizeCodexEvent,
   spawnCodexTurn,
 } from "./ai-chat-process.mjs";
-import { signalProcessTree } from "../shared/process-tree.mjs";
-import { TaskRunService } from "./task-run.mjs";
 
 const SANDBOXES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 const ERROR_CONTENT_LIMIT = 65_536;
@@ -44,6 +44,10 @@ function capTaskRunText(value, limit) {
 
 function taskRunEventContent(normalized) {
   return capTaskRunText(normalized.content || normalized.type || "Codex provider event", 8_192);
+}
+
+function signalProcessGroup(child, signal) {
+  signalProcessTree(child, signal);
 }
 
 function wait(milliseconds) {
@@ -335,6 +339,7 @@ export class AiChatService {
       let startedThreadId = null;
       let terminalOutcome = null;
       let terminalError = "";
+      let pendingError = "";
       const { child, completion } = spawnCodexTurn({
         executable: this.codexExecutable,
         args,
@@ -396,9 +401,11 @@ export class AiChatService {
           });
           if (raw.type === "turn.completed" && terminalOutcome === null) {
             terminalOutcome = "completed";
-          } else if (raw.type === "turn.failed" || raw.type === "error") {
+          } else if (raw.type === "turn.failed") {
             terminalOutcome = "failed";
             terminalError ||= normalized.content;
+          } else if (raw.type === "error") {
+            pendingError ||= normalized.content;
           }
           this.#emit(threadId, { type: "ai.event", event });
         },
@@ -423,6 +430,7 @@ export class AiChatService {
             this.taskRuns.heartbeat(taskRun.id, taskRunAuthority);
           } catch {
             taskRunLost = true;
+            closeCodexTurnControl(child);
             signalProcessTree(child, "SIGTERM");
           }
         }, this.taskRunHeartbeatMs);
@@ -437,6 +445,7 @@ export class AiChatService {
           startedThreadId: () => startedThreadId,
           terminalOutcome: () => terminalOutcome,
           terminalError: () => terminalError,
+          pendingError: () => pendingError,
         }),
         (error) => this.#finishRun({
           run,
@@ -446,6 +455,7 @@ export class AiChatService {
           startedThreadId: () => startedThreadId,
           terminalOutcome: () => terminalOutcome,
           terminalError: () => terminalError,
+          pendingError: () => pendingError,
         }),
       );
       this.completions.set(run.id, finalization);
@@ -475,9 +485,9 @@ export class AiChatService {
     }
 
     active.interrupted = true;
-    signalProcessTree(active.child, "SIGTERM");
+    closeCodexTurnControl(active.child);
     const timer = setTimeout(() => {
-      if (this.active.has(runId)) signalProcessTree(active.child, "SIGKILL");
+      if (this.active.has(runId)) signalProcessGroup(active.child, "SIGKILL");
     }, this.killGraceMs);
     timer.unref();
 
@@ -492,7 +502,7 @@ export class AiChatService {
     const entries = [...this.active.entries()];
     for (const [, active] of entries) {
       active.interrupted = true;
-      signalProcessTree(active.child, "SIGTERM");
+      closeCodexTurnControl(active.child);
     }
 
     const completions = entries
@@ -502,7 +512,7 @@ export class AiChatService {
       const settled = Promise.allSettled(completions);
       await Promise.race([settled, wait(this.killGraceMs)]);
       for (const [runId, active] of entries) {
-        if (this.active.has(runId)) signalProcessTree(active.child, "SIGKILL");
+        if (this.active.has(runId)) signalProcessGroup(active.child, "SIGKILL");
       }
       await settled;
     }
@@ -633,6 +643,7 @@ export class AiChatService {
     startedThreadId,
     terminalOutcome,
     terminalError,
+    pendingError,
   }) {
     let status;
     let publicError = null;
@@ -652,7 +663,7 @@ export class AiChatService {
         : `Codex exited with code ${result.exitCode}`;
     } else if (terminalOutcome() !== "completed") {
       status = "failed";
-      publicError = "Codex exited without reporting turn completion";
+      publicError = pendingError() || "Codex exited without reporting turn completion";
     } else if (!resumingThreadId && !startedThreadId()) {
       status = "failed";
       publicError = "Codex did not provide a thread id";

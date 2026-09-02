@@ -81,59 +81,8 @@ test("a new status entry overrides the old draft status and restores the remaini
     assert.equal(draft.description, "保留的草稿描述");
     assert.equal(draft.priority, "high");
     assert.deepEqual(draft.labels, ["回归证据"]);
-    assert.equal(draft.conversationMode, "new");
-    assert.equal(payload.threadId, null);
-  } finally {
-    await server.close();
-    await rm(profile, { recursive: true, force: true });
-  }
-});
-
-test("a new task can explicitly bind the current Codex conversation", async (t) => {
-  const chrome = chromeExecutable();
-  if (!chrome) {
-    t.skip("Chrome or Chromium is not installed");
-    return;
-  }
-
-  const server = await createServer({
-    root: projectRoot,
-    configFile: false,
-    logLevel: "error",
-    server: { host: "127.0.0.1", port: 0, strictPort: true },
-  });
-  const profile = await mkdtemp(path.join(os.tmpdir(), "task-editor-current-thread-"));
-
-  try {
-    await server.listen();
-    const address = server.httpServer?.address();
-    assert.ok(address && typeof address === "object");
-    const url = `http://127.0.0.1:${address.port}/test/fixtures/task-editor-create-status.html?mode=current`;
-    let stdout;
-    try {
-      ({ stdout } = await execFileAsync(chrome, [
-        "--headless=new",
-        "--disable-background-networking",
-        "--disable-gpu",
-        "--no-first-run",
-        "--no-sandbox",
-        `--user-data-dir=${profile}`,
-        "--virtual-time-budget=2000",
-        "--dump-dom",
-        url,
-      ], { maxBuffer: 2_000_000, timeout: 30_000 }));
-    } catch (error) {
-      if (!String(error?.stdout ?? "").trim()) {
-        t.skip("Chrome or Chromium cannot run headless dump-dom in this environment");
-        return;
-      }
-      throw error;
-    }
-    const result = stdout.match(/data-result="([^"]+)"/);
-    assert.ok(result, "TaskEditor did not submit a creation payload");
-    const payload = JSON.parse(decodeURIComponent(result[1]));
-    assert.equal(payload.draft.conversationMode, "current");
-    assert.equal(payload.threadId, "current-thread-123");
+    assert.equal(payload.createOptions.conversationMode, "new");
+    assert.equal(payload.createOptions.conversationThreadId, null);
   } finally {
     await server.close();
     await rm(profile, { recursive: true, force: true });

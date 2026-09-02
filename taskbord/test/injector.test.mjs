@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import vm from "node:vm";
 
 const source = await readFile(new URL("../scripts/codex-injector.mjs", import.meta.url), "utf8");
 const runtimeSource = await readFile(
@@ -9,14 +10,6 @@ const runtimeSource = await readFile(
 );
 const supervisorSource = await readFile(
   new URL("../scripts/taskboard-supervisor.mjs", import.meta.url),
-  "utf8",
-);
-const windowsInjectorSource = await readFile(
-  new URL("../../source/injector.mjs", import.meta.url),
-  "utf8",
-);
-const taskboardEmbedSource = await readFile(
-  new URL("../../source/taskboard-embed.js", import.meta.url),
   "utf8",
 );
 const packageJson = JSON.parse(
@@ -31,15 +24,6 @@ test("the resident injector authenticates its launcher-managed Taskboard service
   assert.match(source, /proof/);
   assert.match(source, /taskboardInstanceSecret/);
   assert.match(source, /Page\.setDocumentContent/);
-  assert.match(windowsInjectorSource, /buildTaskboardInlineDocument/);
-  assert.match(windowsInjectorSource, /taskboard:api-request/);
-  assert.match(windowsInjectorSource, /globalThis\.fetch = \(input, init\)/);
-  assert.match(windowsInjectorSource, /input instanceof URL[\s\S]*?input\.href/);
-  assert.match(taskboardEmbedSource, /type: FRAME_API_RESPONSE_MESSAGE,[\s\S]*?capability: frameCapability,[\s\S]*?challenge: frameChallenge/);
-  assert.match(windowsInjectorSource, /snapshotUrl = this\.url\.replace/);
-  assert.match(windowsInjectorSource, /function isExternalTaskboardAssetReference/);
-  assert.match(windowsInjectorSource, /__CODEX_TASKBOARD_FRAME_CAPABILITY__ = capability/);
-  assert.match(windowsInjectorSource, /__CODEX_TASKBOARD_FRAME_CHALLENGE__ = challenge/);
   assert.match(runtimeSource, /request\.action === "load-frame"/);
   assert.match(supervisorSource, /ensureInFlight/);
   assert.match(supervisorSource, /await terminateManagedChild\(managedChild\)/);
@@ -50,45 +34,58 @@ test("the resident injector authenticates its launcher-managed Taskboard service
   assert.match(runtimeSource, /request\.frameCapability/);
 });
 
-test("the CDP bridge accepts service ensure and native instruction composer prefill actions", () => {
+test("the CDP bridge accepts service ensure and native task conversation start actions", () => {
   assert.match(source, /const hostBindingName = "__codexTaskboardHostV1"/);
   assert.match(runtimeSource, /request\.action === "ensure"/);
-  assert.match(runtimeSource, /request\.action === "prefill-task-composer"/);
+  assert.match(runtimeSource, /request\.action === "start-task-conversation"/);
   assert.match(runtimeSource, /request\.action === "open-external"/);
-  assert.match(runtimeSource, /request\.instruction\.length <= 1_024/);
-  assert.match(source, /function prefillTaskComposerViaCdp/);
-  assert.match(source, /cdp\.send\("Input\.insertText", \{ text: instruction \}\)/);
+  assert.match(runtimeSource, /request\.taskId/);
+  assert.match(runtimeSource, /request\.previousThreadId\.length <= 240/);
+  assert.match(runtimeSource, /request\.codexHostId\.length <= 240/);
+  assert.match(runtimeSource, /request\.targetRoot\.length <= 4_096/);
+  assert.match(runtimeSource, /payload\.length > 4_194_304/);
+  assert.match(runtimeSource, /request\.instruction\.length <= 4_000_000/);
+  assert.match(runtimeSource, /request\.title\.length <= 240/);
+  assert.match(source, /async function startTaskConversationViaCdp/);
+  assert.match(source, /data-composer-placement="home"/);
+  assert.match(source, /\(editor\.textContent \|\| ""\) !== \$\{JSON\.stringify\(instruction\)\}/);
+  assert.doesNotMatch(source, /cdp\.send\("Input\.insertText", \{ text: instruction \}\)/);
+  assert.match(
+    source,
+    /cdp\.send\("Input\.dispatchKeyEvent", \{\s*type: "keyDown",\s*key: "Enter"/,
+  );
+  assert.match(
+    source,
+    /cdp\.send\("Input\.dispatchKeyEvent", \{\s*type: "keyUp",\s*key: "Enter"/,
+  );
+  assert.match(source, /submitted = true/);
+  assert.match(source, /if \(!submitted\) throw new Error/);
+  assert.match(source, /const threadId = typeof started\.result\.value === "string"/);
+  assert.match(source, /threadId && threadId !== previousThreadId/);
+  assert.match(source, /discoveredThreadId = threadId/);
+  assert.match(source, /error\.threadId = discoveredThreadId/);
+  assert.match(source, /function requestCodexAppServerViaCdp/);
+  assert.match(source, /type: "mcp-request"/);
+  assert.match(source, /hostId: \$\{JSON\.stringify\(hostId\)\}/);
+  assert.match(source, /"thread\/read"/);
+  assert.match(source, /normalizeWorkspaceRoot\(result\.thread\.cwd\) === normalizedTargetRoot/);
+  assert.match(source, /"thread\/name\/set"/);
+  assert.match(source, /result\.thread\.name === title/);
+  assert.match(source, /const taskConversationOperations = new Map\(\)/);
+  assert.match(source, /taskConversationOperations\.get\(request\.taskId\)/);
+  assert.match(source, /const taskConversationAppServerTimeoutMs = 30_000/);
+  assert.doesNotMatch(source, /window\.postMessage\(\{ type: "rename-thread" \}/);
+  assert.match(source, /return \{ threadId, title \}/);
   assert.match(source, /Runtime\.bindingCalled/);
   assert.match(source, /Page\.createIsolatedWorld/);
   assert.match(source, /Runtime\.addBinding", \{\s*name: hostBindingName,\s*executionContextId:/);
   assert.match(source, /params\.executionContextId !== activeContextId/);
   assert.match(runtimeSource, /params\.executionContextId/);
+  assert.match(runtimeSource, /threadId: error\.threadId/);
   assert.match(source, /hostResponseMessage/);
   assert.match(source, /if \(keepAlive\) await hostBridge\.install\(\)/);
   assert.match(source, /hostBridge\.publishHeartbeat/);
   assert.match(source, /withoutTaskboardLauncherEnvironment\(process\.env\)/);
-});
-
-test("the Taskboard load-error retry restarts the managed service before reopening the frame", () => {
-  assert.match(
-    taskboardEmbedSource,
-    /retry\.addEventListener\("click", \(\) => void restartTaskboardFromError\(\), \{ once: true \}\)/,
-  );
-  assert.match(
-    taskboardEmbedSource,
-    /async function restartTaskboardFromError\(\)[\s\S]*?requestTaskboardService\("restart"\)[\s\S]*?response\?\.restarted \|\| response\?\.reloadFrame/,
-  );
-  assert.match(taskboardEmbedSource, /if \(!hasLiveHostBinding\(\)\) \{[\s\S]*?openTaskboard\(\);/);
-});
-
-test("Windows service operations settle on PowerShell exit before inherited pipes close", () => {
-  assert.match(windowsInjectorSource, /let settled = false;/);
-  assert.match(taskboardEmbedSource, /if \(!frame\) openTaskboard\(\);/);
-  assert.match(taskboardEmbedSource, /function waitForFrameDocumentLoad\(\)/);
-  assert.match(taskboardEmbedSource, /await waitForFrameDocumentLoad\(\);[\s\S]*?requestHostLoadFrame/);
-  assert.match(windowsInjectorSource, /child\.on\("exit", \(code, signal\) => \{[\s\S]*?setImmediate\(\(\) => settle\(code, signal\)\)/);
-  assert.match(windowsInjectorSource, /child\.on\("close", \(code, signal\) => settle\(code, signal\)/);
-  assert.match(windowsInjectorSource, /child\.stdout\.destroy\(\);\s*child\.stderr\.destroy\(\);/);
 });
 
 test("the CDP bridge exposes only the fixed Taskboard automation operations", () => {
@@ -109,96 +106,101 @@ test("the CDP bridge exposes only the fixed Taskboard automation operations", ()
   assert.doesNotMatch(source, /automations\.toml/);
 });
 
-test("passive automation policy keeps the user switch enabled across idle pauses", () => {
+test("passive automation policy keeps idle pauses and only resumes quota pauses", () => {
   assert.match(source, /taskboardAutomationPolicyOperation/);
   assert.match(source, /previousQuotaState: current\.quota\?\.state/);
   assert.match(source, /enqueueQuotaPolicyMutation\(record, rpc, \{ explicit: true \}\)/);
-  assert.doesNotMatch(source, /current\.request = \{ \.\.\.current\.request, enabledByUser: false \}/);
-  assert.doesNotMatch(
-    windowsInjectorSource,
-    /current\.request = \{ \.\.\.current\.request, enabledByUser: false \}/,
-  );
-  assert.doesNotMatch(windowsInjectorSource, /if \(result\.autoPaused\)/);
   assert.match(
-    windowsInjectorSource,
-    /if \(result\?\.error === "not-found"\) \{[\s\S]*?operation: "pause",[\s\S]*?autoPaused: !explicit/,
+    source,
+    /!explicit && result\.operation === "list" && result\.item\?\.status === "PAUSED"/,
   );
-  assert.match(
-    windowsInjectorSource,
-    /function scheduleTaskboardAutomationPolicyCheck\(record, result\)[\s\S]*?if \(!request\.enabledByUser\) return;[\s\S]*?scheduleTaskboardAutomationPolicyCheck\(current, result\);/,
-  );
+  assert.match(source, /enabledByUser: false/);
   assert.match(source, /record\.quota \? \{ quota: record\.quota \} : \{\}/);
 });
 
-test("the Windows automation host consumes one native run per taskboard activity generation", () => {
-  assert.match(windowsInjectorSource, /taskboardAutomationActivityKey/);
-  assert.match(windowsInjectorSource, /taskboardAutomationGateDecision/);
-  assert.match(windowsInjectorSource, /automationExists: Boolean\(currentItem\)/);
-  assert.match(windowsInjectorSource, /if \(gateDecision\.runObserved\)/);
-  assert.match(windowsInjectorSource, /readLatestAutomationRunFailure/);
-  assert.match(windowsInjectorSource, /automationGate: current\.automationGate/);
-  assert.match(windowsInjectorSource, /current\.automationGate = result\.automationGate/);
-  assert.match(windowsInjectorSource, /current\.automationIssue = result\.automationIssue/);
-  assert.match(windowsInjectorSource, /Taskboard automation run diagnosis failed/);
+test("persisted automation policies retain remote project identity", () => {
+  const storedPolicySource = source.slice(
+    source.indexOf("function storedAutomationPolicy"),
+    source.indexOf("function restoredAutomationPolicy"),
+  );
+  assert.match(storedPolicySource, /codexProjectKind: request\.codexProjectKind/);
+  assert.match(storedPolicySource, /codexHostId: request\.codexHostId/);
+  assert.match(storedPolicySource, /remoteProjects: request\.remoteProjects/);
 });
 
-test("the Windows injector registers automation only on a native Codex renderer", () => {
-  assert.match(
-    windowsInjectorSource,
-    /expression: "typeof window\.electronBridge\?\.sendMessageFromView === 'function'"/,
+test("automation list rebuilds a stored policy on the incoming project identity", async () => {
+  const reconcileSource = source.slice(
+    source.indexOf("async function reconcileStoredAutomationPolicy"),
+    source.indexOf("async function enqueueCurrentQuotaPolicy"),
   );
-  assert.match(
-    windowsInjectorSource,
-    /if \(nativeAutomationAvailable\?\.result\?\.value === true\) \{\s*registerTaskboardAutomationSender\(send\);\s*automationSenderRegistered = true;/,
-  );
-  assert.match(
-    windowsInjectorSource,
-    /restoreAutomations: \(\) => automationSenderRegistered\s*\? restoreTaskboardAutomationPolicies\(send\)\s*: Promise\.resolve\(\{ skipped: true \}\)/,
-  );
-});
+  const storedRequest = {
+    taskboardProjectId: "taskboard-project",
+    codexProjectId: "old-project",
+    codexProjectKind: "local",
+    codexHostId: "local",
+    projectName: "Old project",
+    workspacePath: "/old/project",
+    skillPath: "/old/skill/SKILL.md",
+    automationId: "automation-1",
+    enabledByUser: true,
+    quotaAware: true,
+    intervalMinutes: 15,
+    model: "gpt-5.5",
+    reasoningEffort: "high",
+  };
+  const incomingRequest = {
+    ...storedRequest,
+    codexProjectId: "remote-project",
+    codexProjectKind: "remote",
+    codexHostId: "remote-host",
+    projectName: "Remote project",
+    workspacePath: "/remote/project",
+    remoteProjects: [{
+      codexProjectId: "remote-worktree",
+      codexProjectKind: "remote",
+      codexHostId: "remote-host",
+      workspacePath: "/remote/project-worktree",
+    }],
+    skillPath: "/new/skill/SKILL.md",
+    enabledByUser: false,
+    quotaAware: false,
+    intervalMinutes: 5,
+    model: "gpt-5.6-sol",
+    reasoningEffort: "ultra",
+  };
+  let appliedRequest;
+  const reconcileStoredAutomationPolicy = vm.runInNewContext(`(${reconcileSource})`, {
+    ensureQuotaPoliciesLoaded: async () => {},
+    quotaPolicyRecords: new Map([[
+      storedRequest.taskboardProjectId,
+      { request: storedRequest },
+    ]]),
+    updateAndApplyQuotaPolicy: async (request) => {
+      appliedRequest = request;
+      return { policy: request };
+    },
+    enqueueQuotaPolicyMutation: () => {
+      throw new Error("stored target must not continue");
+    },
+    storedAutomationPolicy: (request) => request,
+  });
 
-test("the Windows injector restores every enabled Taskboard policy", () => {
-  assert.match(
-    windowsInjectorSource,
-    /for \(const \[projectId, record\] of taskboardAutomationPolicyRecords\) \{\s*if \(record\.request\.enabledByUser\) \{\s*await enqueueCurrentTaskboardAutomationPolicy\(projectId\);/,
+  const result = await reconcileStoredAutomationPolicy(incomingRequest, () => {});
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(appliedRequest)),
+    {
+      ...incomingRequest,
+      automationId: "automation-1",
+      enabledByUser: true,
+      quotaAware: true,
+      intervalMinutes: 15,
+      model: "gpt-5.5",
+      reasoningEffort: "high",
+    },
   );
-  assert.match(windowsInjectorSource, /if \(!request\.enabledByUser\) return;/);
-  assert.doesNotMatch(
-    windowsInjectorSource,
-    /if \(record\.request\.enabledByUser && record\.request\.quotaAware\)/,
-  );
-});
-
-test("the Windows injector disposes stale page sessions before reconnecting", () => {
-  assert.match(
-    windowsInjectorSource,
-    /function clearPageSessions\(reason\)[\s\S]*?session\.dispose\?\.\(\)[\s\S]*?pageTargetsBySessionId\.clear\(\)[\s\S]*?attachedTargetIds\.clear\(\)[\s\S]*?attachingTargetIds\.clear\(\)/,
-  );
-  assert.match(
-    windowsInjectorSource,
-    /if \(browserConnection === connection\) browserConnection = null;\s*clearPageSessions\("Browser DevTools connection closed"\);/,
-  );
-  assert.match(
-    windowsInjectorSource,
-    /invalidatePageSession\(targetId, null, "Target\.removed"\)/,
-  );
-});
-
-test("the Windows injector retries automation restore after transient renderer loss", () => {
-  assert.match(windowsInjectorSource, /function scheduleTaskboardAutomationRestoreRetry\(delayMs = 1_000\)/);
-  assert.match(windowsInjectorSource, /function isTransientTaskboardAutomationRestoreError\(error\)/);
-  assert.match(
-    windowsInjectorSource,
-    /restoreTaskboardAutomationPolicies\(send, \{ retryOnTransientFailure = true \} = \{\}\)/,
-  );
-  assert.match(
-    windowsInjectorSource,
-    /retryOnTransientFailure && isTransientTaskboardAutomationRestoreError\(error\)/,
-  );
-  assert.match(
-    windowsInjectorSource,
-    /scheduleTaskboardAutomationRestoreRetry\(\);[\s\S]*?throw error;/,
-  );
+  assert.equal(result.policy, appliedRequest);
+  assert.match(source, /reconcileStoredAutomationPolicy\(\s*request,\s*rpc/);
+  assert.match(source, /policy: storedAutomationPolicy\(current\.request\)/);
 });
 
 test("the package injection command remains resident for tab-triggered recovery", () => {

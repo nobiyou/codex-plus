@@ -3468,7 +3468,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   color: color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 72%, #1a1210) !important;
   border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #b61f31) 16%, transparent) !important;
   outline: none !important;
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 6%, rgb(255 255 255 / 0.92)) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 6%, rgb(255 255 255 / 0.92)) !important;
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 6%, transparent),
     inset 0 1px 0 rgb(255 255 255 / 0.8) !important;
@@ -3489,7 +3489,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
 :root[data-codex-pokedex-theme="on"]:not(.electron-dark) .composer-surface-chrome button[aria-label="Submit"]:hover {
   color: color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 90%, #120c0a) !important;
   border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 28%, transparent) !important;
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 11%, rgb(255 255 255 / 0.96)) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 11%, rgb(255 255 255 / 0.96)) !important;
   box-shadow:
     0 2px 8px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 10%, transparent),
     inset 0 1px 0 rgb(255 255 255 / 0.9) !important;
@@ -3502,7 +3502,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   color: rgb(236 242 250 / 0.9) !important;
   border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #b61f31) 22%, transparent) !important;
   outline: none !important;
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 12%, rgb(28 30 40 / 0.78)) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 12%, rgb(28 30 40 / 0.78)) !important;
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.22) !important;
   animation: none !important;
 }
@@ -3521,7 +3521,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
 :root[data-codex-pokedex-theme="on"].electron-dark .composer-surface-chrome button[aria-label="Submit"]:hover {
   color: #ffffff !important;
   border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 34%, transparent) !important;
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 18%, rgb(34 36 48 / 0.88)) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 18%, rgb(34 36 48 / 0.88)) !important;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -3542,11 +3542,11 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
 }
 
 /* Suggestion / follow-up chips in the thread (rounded pill cards) */
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-full"],
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-2xl"],
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container a[class*="rounded-full"],
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-full"][class*="border"],
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-2xl"][class*="border"] {
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-full"]:not(.composer-surface-chrome button):not([class*="Composer"] button),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-2xl"]:not(.composer-surface-chrome button):not([class*="Composer"] button),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container a[class*="rounded-full"]:not(.composer-surface-chrome a):not([class*="Composer"] a),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-full"][class*="border"]:not(.composer-surface-chrome *):not([class*="Composer"] *),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-2xl"][class*="border"]:not(.composer-surface-chrome *):not([class*="Composer"] *) {
   border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 20%, transparent) !important;
   color: color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 78%, #1a1210) !important;
   background: linear-gradient(
@@ -3559,11 +3559,11 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
     inset 0 1px 0 rgb(255 255 255 / 0.9) !important;
 }
 
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-full"]:hover,
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-2xl"]:hover,
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container a[class*="rounded-full"]:hover,
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-full"][class*="border"]:hover,
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-2xl"][class*="border"]:hover {
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-full"]:not(.composer-surface-chrome button):not([class*="Composer"] button):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container button[class*="rounded-2xl"]:not(.composer-surface-chrome button):not([class*="Composer"] button):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container a[class*="rounded-full"]:not(.composer-surface-chrome a):not([class*="Composer"] a):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-full"][class*="border"]:not(.composer-surface-chrome *):not([class*="Composer"] *):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .thread-scroll-container [class*="rounded-2xl"][class*="border"]:not(.composer-surface-chrome *):not([class*="Composer"] *):hover {
   border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 36%, transparent) !important;
   color: color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 90%, #120c0a) !important;
   background: linear-gradient(
@@ -4465,7 +4465,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   color: color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 78%, #1a1210) !important;
   border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #b61f31) 18%, transparent) !important;
   outline: none !important;
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 7%, rgb(255 255 255 / 0.9)) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 7%, rgb(255 255 255 / 0.9)) !important;
   background-image: none !important;
   box-shadow:
     0 1px 2px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 6%, transparent),
@@ -4508,10 +4508,133 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   opacity: 1 !important;
 }
 
-/* Soft-match: trailing circular action next to mic in composer (when labels change). */
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) .composer-surface-chrome button[class*="rounded-full"]:last-of-type,
-:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="composer-surface"] button[class*="rounded-full"]:has(svg):last-child {
-  /* only lightly tint if it still looks like a solid primary pill */
+/* Composer action button: match stable semantic labels, not wrapper positions. */
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  :is(.composer-surface-chrome, [class*="composer-surface"])
+  button:is(
+    [aria-label="Stop"],
+    [aria-label="Send"],
+    [aria-label="Submit"],
+    [aria-label*="Stop" i],
+    [aria-label*="Send" i],
+    [aria-label*="Submit" i],
+    [aria-label*="停止"],
+    [aria-label*="发送"],
+    [aria-label*="提交"],
+    [title*="Stop" i],
+    [title*="Send" i],
+    [title*="Submit" i],
+    [title*="停止"],
+    [title*="发送"],
+    [title*="提交"]
+  ) {
+  color: color-mix(in srgb, var(--codex-plus-accent-dark, #185295) 82%, #163042) !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 28%, transparent) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 8%, rgb(255 255 255 / 0.94)) !important;
+  background-image: none !important;
+  box-shadow:
+    0 2px 7px color-mix(in srgb, var(--codex-plus-accent-dark, #185295) 10%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.88) !important;
+  animation: none !important;
+}
+
+/* Light-mode action controls keep the accent visible without solid fills. */
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [role="alert"] button:not(:has(svg)),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="usage-banner"] button:not(:has(svg)),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="rate-limit"] button:not(:has(svg)),
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="quota"] button:not(:has(svg)) {
+  color: color-mix(in srgb, var(--codex-plus-accent-dark, #185295) 84%, #163042) !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 30%, transparent) !important;
+  border-radius: 999px !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 10%, rgb(255 255 255 / 0.94)) !important;
+  background-image: none !important;
+  box-shadow:
+    0 2px 8px color-mix(in srgb, var(--codex-plus-accent-dark, #185295) 9%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.9) !important;
+  animation: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  :is(.composer-surface-chrome, [class*="composer-surface"])
+  button:is(
+    [aria-label="Stop"],
+    [aria-label="Send"],
+    [aria-label="Submit"],
+    [aria-label*="Stop" i],
+    [aria-label*="Send" i],
+    [aria-label*="Submit" i],
+    [aria-label*="停止"],
+    [aria-label*="发送"],
+    [aria-label*="提交"],
+    [title*="Stop" i],
+    [title*="Send" i],
+    [title*="Submit" i],
+    [title*="停止"],
+    [title*="发送"],
+    [title*="提交"]
+  ):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [role="alert"] button:not(:has(svg)):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="usage-banner"] button:not(:has(svg)):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="rate-limit"] button:not(:has(svg)):hover,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="quota"] button:not(:has(svg)):hover {
+  color: color-mix(in srgb, var(--codex-plus-accent-dark, #185295) 94%, #102538) !important;
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 48%, transparent) !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 16%, rgb(255 255 255 / 0.98)) !important;
+  box-shadow:
+    0 4px 12px color-mix(in srgb, var(--codex-plus-accent-dark, #185295) 13%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.94) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  :is(.composer-surface-chrome, [class*="composer-surface"])
+  button:is(
+    [aria-label="Stop"],
+    [aria-label="Send"],
+    [aria-label="Submit"],
+    [aria-label*="Stop" i],
+    [aria-label*="Send" i],
+    [aria-label*="Submit" i],
+    [aria-label*="停止"],
+    [aria-label*="发送"],
+    [aria-label*="提交"],
+    [title*="Stop" i],
+    [title*="Send" i],
+    [title*="Submit" i],
+    [title*="停止"],
+    [title*="发送"],
+    [title*="提交"]
+  ):focus-visible,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [role="alert"] button:not(:has(svg)):focus-visible,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="usage-banner"] button:not(:has(svg)):focus-visible,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="rate-limit"] button:not(:has(svg)):focus-visible,
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark) [class*="quota"] button:not(:has(svg)):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 42%, transparent) !important;
+  outline-offset: 2px;
+}
+
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  :is(.composer-surface-chrome, [class*="composer-surface"])
+  button:is(
+    [aria-label="Stop"],
+    [aria-label="Send"],
+    [aria-label="Submit"],
+    [aria-label*="Stop" i],
+    [aria-label*="Send" i],
+    [aria-label*="Submit" i],
+    [aria-label*="停止"],
+    [aria-label*="发送"],
+    [aria-label*="提交"],
+    [title*="Stop" i],
+    [title*="Send" i],
+    [title*="Submit" i],
+    [title*="停止"],
+    [title*="发送"],
+    [title*="提交"]
+  ) svg {
+  color: inherit !important;
+  stroke: currentColor !important;
+  fill: currentColor !important;
+  opacity: 1 !important;
 }
 
 /* Native settings switches: keep track and thumb visually separated in dark mode. */
@@ -4713,4 +4836,1056 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   background-color: transparent !important;
   background-image: none !important;
   box-shadow: none !important;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Codex native semantic token bridge (26.818+).                             */
+/* The app renamed the old bg/text/border token classes. Keep the theme's     */
+/* existing token palette as the single source for the new utility classes.   */
+/* -------------------------------------------------------------------------- */
+:root[data-codex-pokedex-theme="on"] {
+  --color-surface: var(--color-token-main-surface-primary) !important;
+  --color-codex-diff-surface: color-mix(
+    in srgb,
+    var(--color-token-editor-background, var(--color-token-main-surface-primary)) 94%,
+    var(--codex-plus-accent, #b61f31) 6%
+  ) !important;
+  --color-surface-elevated: var(--color-token-dropdown-background) !important;
+  --color-surface-elevated-secondary: var(--color-token-menu-background) !important;
+  --color-surface-secondary: var(--color-token-main-surface-secondary, var(--color-token-input-background)) !important;
+  --color-surface-tertiary: var(--color-token-input-background) !important;
+  --color-background-surface: var(--color-token-main-surface-primary) !important;
+  --color-background-surface-under: var(--startup-background, var(--color-token-main-surface-primary)) !important;
+  --color-background-elevated-primary: var(--color-token-dropdown-background) !important;
+  --color-background-elevated-secondary: var(--color-token-menu-background) !important;
+  --color-background-editor-opaque: var(--color-token-editor-background) !important;
+  --color-background-control: var(--color-token-input-background) !important;
+  --color-background-control-opaque: var(--color-token-input-background) !important;
+  --color-background-application-menu: var(--color-token-menu-background) !important;
+  --color-background-button-primary: var(--color-token-button-background) !important;
+  --color-background-button-primary-hover: var(--color-token-button-secondary-hover-background) !important;
+  --color-background-button-primary-active: var(--color-token-list-active-selection-background) !important;
+  --color-background-button-secondary: var(--color-token-input-background) !important;
+  --color-background-button-secondary-hover: var(--color-token-toolbar-hover-background) !important;
+  --color-background-button-secondary-active: var(--color-token-list-active-selection-background) !important;
+  --color-background-button-tertiary: transparent !important;
+  --color-background-button-tertiary-hover: var(--color-token-toolbar-hover-background) !important;
+  --color-background-primary-solid: var(--color-token-button-background) !important;
+  --color-background-primary-solid-hover: color-mix(in srgb, var(--color-token-button-background) 88%, #000) !important;
+  --color-background-primary-solid-active: color-mix(in srgb, var(--color-token-button-background) 78%, #000) !important;
+  --color-background-primary-soft: var(--color-token-button-secondary-hover-background) !important;
+  --color-background-primary-soft-active: var(--color-token-list-active-selection-background) !important;
+  --color-background-primary-soft-alpha: var(--color-token-list-hover-background) !important;
+  --color-background-primary-ghost-hover: var(--color-token-toolbar-hover-background) !important;
+  --color-background-primary-outline-hover: var(--color-token-toolbar-hover-background) !important;
+  --color-background-secondary: var(--color-token-input-background) !important;
+  --color-background-secondary-solid: var(--color-token-input-background) !important;
+  --color-background-secondary-soft: var(--color-token-toolbar-hover-background) !important;
+  --color-background-secondary-soft-alpha: var(--color-token-toolbar-hover-background) !important;
+  --color-background-secondary-ghost-hover: var(--color-token-toolbar-hover-background) !important;
+  --color-background-secondary-outline-hover: var(--color-token-toolbar-hover-background) !important;
+  --color-background-disabled: color-mix(in srgb, var(--color-token-foreground) 10%, transparent) !important;
+  --color-text: var(--color-token-foreground) !important;
+  --color-text-primary: var(--color-token-text-primary) !important;
+  --color-text-primary-solid: var(--color-token-text-primary) !important;
+  --color-text-secondary: var(--color-token-text-secondary) !important;
+  --color-text-secondary-solid: var(--color-token-text-secondary) !important;
+  --color-text-tertiary: var(--color-token-text-tertiary) !important;
+  --color-text-foreground: var(--color-token-foreground) !important;
+  --color-text-foreground-secondary: var(--color-token-text-secondary) !important;
+  --color-text-foreground-tertiary: var(--color-token-text-tertiary) !important;
+  --color-text-prose: var(--color-token-conversation-body) !important;
+  --color-text-emphasis: var(--color-token-text-primary) !important;
+  --color-text-accent: var(--codex-plus-accent) !important;
+  --color-text-on-accent: var(--color-token-button-foreground) !important;
+  --color-text-button-primary: var(--color-token-button-foreground) !important;
+  --color-text-button-secondary: var(--color-token-text-primary) !important;
+  --color-text-button-tertiary: var(--color-token-text-primary) !important;
+  --color-text-disabled: var(--color-token-text-tertiary) !important;
+  --color-text-error: var(--codex-plus-accent) !important;
+  --color-text-danger: var(--codex-plus-accent) !important;
+  --color-text-success: var(--color-token-charts-green) !important;
+  --color-text-warning: var(--color-token-charts-yellow) !important;
+  --color-text-tip-badge: var(--color-token-badge-foreground) !important;
+  --color-codex-description: var(--color-token-description-foreground) !important;
+  --color-codex-icon: var(--color-token-foreground) !important;
+  --color-codex-icon-active: var(--codex-plus-accent) !important;
+  --color-icon-primary: var(--color-token-foreground) !important;
+  --color-icon-secondary: var(--color-token-text-secondary) !important;
+  --color-icon-tertiary: var(--color-token-text-tertiary) !important;
+  --color-icon-accent: var(--codex-plus-accent) !important;
+  --color-icon-error: var(--codex-plus-accent) !important;
+  --color-icon-success: var(--color-token-charts-green) !important;
+  --color-icon-warning: var(--color-token-charts-yellow) !important;
+  --color-chart-blue: var(--color-token-charts-blue) !important;
+  --color-chart-green: var(--color-token-charts-green) !important;
+  --color-chart-orange: var(--color-token-charts-orange) !important;
+  --color-chart-red: var(--color-token-charts-red) !important;
+  --color-chart-yellow: var(--color-token-charts-yellow) !important;
+  --color-chart-purple: var(--codex-plus-accent) !important;
+  --color-border: var(--color-token-border) !important;
+  --color-border-light: var(--color-token-border-light) !important;
+  --color-border-subtle: var(--color-token-border-light) !important;
+  --color-border-default: var(--color-token-border-default) !important;
+  --color-border-strong: var(--color-token-border-heavy) !important;
+  --color-border-heavy: var(--color-token-border-heavy) !important;
+  --color-border-focus: var(--color-token-focus-border) !important;
+  --color-border-disabled: var(--color-token-border-light) !important;
+  --color-border-primary-outline: var(--color-token-input-border) !important;
+  --color-border-secondary-outline: var(--color-token-border-default) !important;
+  --color-ring: var(--color-token-focus-border) !important;
+}
+
+/* Native Codex tooltips / conversation hover cards. The 26.818+ tooltip
+   surface uses semantic utilities that need the active accent treatment. */
+:root[data-codex-pokedex-theme="on"] [role="tooltip"] {
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 28%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  color: var(--color-token-text-primary, #163842) !important;
+  outline: none !important;
+  box-shadow:
+    0 16px 36px color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 16%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 12%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.72) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.1) !important;
+  backdrop-filter: blur(14px) saturate(1.1) !important;
+}
+
+/* Conversation detail hover card: use a calm information surface rather than
+   the nearly-white default, while keeping the card's native dimensions. */
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="right"] {
+  overflow: hidden !important;
+  border-radius: 14px !important;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 9%, var(--color-token-menu-background, #fff)) 0%,
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 7%, var(--color-token-menu-background, #fff)) 100%
+    ) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="right"]::before {
+  position: absolute;
+  inset: 9px auto 9px 0;
+  width: 3px;
+  border-radius: 0 999px 999px 0;
+  background: linear-gradient(
+    180deg,
+    var(--codex-plus-highlight, #8fd0dc),
+    var(--codex-plus-accent, #277d91)
+  );
+  content: "";
+  pointer-events: none;
+}
+
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="right"] button {
+  color: var(--color-token-text-primary, #163842) !important;
+  border-radius: 8px !important;
+}
+
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="right"] button:hover,
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="right"] button:focus-visible {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 10%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="right"] svg {
+  color: var(--codex-plus-accent, #277d91) !important;
+}
+
+/* Action tooltip: stronger contrast and a smaller footprint for quick reading. */
+:root[data-codex-pokedex-theme="on"] [role="tooltip"][data-side="top"] {
+  border-color: color-mix(
+    in srgb,
+    var(--codex-plus-highlight, #8fd0dc) 48%,
+    var(--codex-plus-accent, #277d91)
+  ) !important;
+  border-radius: 10px !important;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 92%, #fff 8%),
+      color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 88%, #000 12%)
+    ) !important;
+  color: var(--color-token-button-foreground, #fff) !important;
+  box-shadow:
+    0 9px 22px color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 24%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.22) !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+  line-height: 16px !important;
+}
+
+/* Task sequence hover card: keep this portal-mounted tooltip separate from
+   action hints while matching the light information-card treatment in the
+   active theme. The DOM anchor is the composer sequence trigger, not a
+   generated utility class, so native placement and hover behavior remain
+   untouched. */
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"] {
+  box-sizing: border-box !important;
+  max-width: min(360px, calc(100vw - 24px)) !important;
+  padding: 0 !important;
+  border-color: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 36%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  border-radius: 12px !important;
+  background:
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 18%, transparent),
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 8%, transparent)
+    ),
+    color-mix(in srgb, var(--color-token-menu-background, #fff) 92%, transparent) !important;
+  color: var(--color-token-text-primary, #163842) !important;
+  box-shadow:
+    0 14px 30px color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 18%, transparent),
+    0 3px 8px rgb(21 57 70 / 0.1),
+    inset 0 1px 0 rgb(255 255 255 / 0.78) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.08) !important;
+  backdrop-filter: blur(14px) saturate(1.08) !important;
+  font-size: 13px !important;
+  font-weight: 520 !important;
+  line-height: 18px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  > div {
+  padding: 0 !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  > div > div > [class*="max-w-80"] {
+  max-width: none !important;
+  border-radius: 11px !important;
+  background: transparent !important;
+  overflow: hidden !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"] {
+  padding: 8px !important;
+  scrollbar-color: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 46%,
+    transparent
+  ) transparent !important;
+}
+
+/* Each step gets a stable compact row so longer task names remain easy to
+   scan without changing the native scroll container's size or behavior. */
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"]
+  [class*="items-start"][class*="gap-2"] {
+  box-sizing: border-box !important;
+  min-height: 28px !important;
+  gap: 8px !important;
+  padding: 5px 7px !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+  color: var(--color-token-text-secondary, #55717b) !important;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"]
+  [class*="items-start"][class*="gap-2"]:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 16%,
+    transparent
+  ) !important;
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 7%,
+    transparent
+  ) !important;
+  color: var(--codex-plus-accent-dark, #175263) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"]
+  [class*="items-start"][class*="gap-2"]
+  [class*="size-4"] {
+  box-sizing: border-box !important;
+  flex: 0 0 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 48%,
+    transparent
+  ) !important;
+  border-radius: 50% !important;
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 10%,
+    transparent
+  ) !important;
+  color: var(--codex-plus-accent, #277d91) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"]
+  [class*="items-start"][class*="gap-2"]
+  [class*="size-4"]
+  svg {
+  width: 12px !important;
+  height: 12px !important;
+  color: var(--codex-plus-accent, #277d91) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"]
+  span[class*="leading-4"] {
+  min-width: 0 !important;
+  color: var(--color-token-text-secondary, #55717b) !important;
+  font-size: 13px !important;
+  font-weight: 520 !important;
+  line-height: 18px !important;
+  overflow-wrap: anywhere !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"] {
+  background:
+    linear-gradient(
+      150deg,
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 18%, transparent),
+      color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 14%, transparent)
+    ),
+    color-mix(in srgb, var(--color-token-menu-background, #20272e) 94%, transparent) !important;
+  color: var(--color-token-text-primary, #f3f6f8) !important;
+  box-shadow:
+    0 16px 32px rgb(0 0 0 / 0.38),
+    0 3px 8px color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 24%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.1) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has([data-above-composer-portal] span:is([data-state="open"], [data-state="delayed-open"]))
+  [role="tooltip"][data-side="top"]
+  [class*="vertical-scroll-fade-mask"]
+  [class*="items-start"][class*="gap-2"]
+  span[class*="leading-4"] {
+  color: var(--color-token-text-secondary, #b9cbd1) !important;
+}
+
+/* Profile menu: keep the portal-mounted Radix surface visually connected to
+   the themed sidebar without changing its native placement or menu behavior. */
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"] {
+  box-sizing: border-box !important;
+  padding: 7px !important;
+  gap: 0 !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 30%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  border-radius: 15px !important;
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 14%, transparent),
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 8%, transparent)
+    ),
+    color-mix(in srgb, var(--color-token-menu-background, #fff) 84%, transparent) !important;
+  color: var(--color-token-text-primary, #163842) !important;
+  box-shadow:
+    0 20px 40px color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 22%, transparent),
+    0 3px 10px rgb(21 57 70 / 0.12),
+    inset 0 1px 0 rgb(255 255 255 / 0.82) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(1.14) !important;
+  backdrop-filter: blur(18px) saturate(1.14) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"] > div {
+  gap: 2px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"] {
+  box-sizing: border-box !important;
+  min-height: 30px !important;
+  padding: 6px 10px !important;
+  border: 1px solid transparent !important;
+  border-radius: 10px !important;
+  color: var(--color-token-text-primary, #163842) !important;
+  font-size: 13px !important;
+  font-weight: 520 !important;
+  line-height: 18px !important;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"] > div {
+  min-height: 18px !important;
+  gap: 9px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"]:is(:hover, [data-highlighted="true"], :focus-visible) {
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 20%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 12%, transparent) !important;
+  color: var(--codex-plus-accent-dark, #175263) !important;
+  transform: translateX(1px) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--codex-plus-accent, #277d91) 54%, transparent) !important;
+  outline-offset: -2px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:first-child {
+  min-height: 34px !important;
+  margin-bottom: 2px !important;
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 16%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 12%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:first-child > div > span:last-child {
+  color: var(--codex-plus-accent-dark, #175263) !important;
+  font-weight: 700 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:nth-child(2) {
+  margin-bottom: 3px !important;
+  border-bottom-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 18%, transparent) !important;
+  border-radius: 10px 10px 6px 6px !important;
+  color: var(--color-token-text-secondary, #55717b) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"] svg,
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"] img {
+  width: 18px !important;
+  height: 18px !important;
+  color: var(--codex-plus-accent, #277d91) !important;
+  opacity: 0.82 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:last-child {
+  min-height: 32px !important;
+  margin-top: 3px !important;
+  border-top-color: color-mix(in srgb, #b42318 24%, transparent) !important;
+  border-radius: 6px 6px 10px 10px !important;
+  color: color-mix(in srgb, #a22b24 82%, var(--color-token-text-primary, #163842)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:last-child svg {
+  color: #a22b24 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:last-child:is(:hover, [data-highlighted="true"], :focus-visible) {
+  border-color: color-mix(in srgb, #b42318 22%, transparent) !important;
+  background: color-mix(in srgb, #b42318 10%, transparent) !important;
+  color: #922820 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  a[role="menuitem"] {
+  color: var(--codex-plus-accent-dark, #175263) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  a[role="menuitem"] span.text-default,
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  a[role="menuitem"] svg {
+  color: var(--codex-plus-accent-dark, #175263) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  a[role="menuitem"]:is(:hover, [data-highlighted="true"], :focus-visible) {
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 20%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 12%, transparent) !important;
+  color: var(--codex-plus-accent-dark, #175263) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  button[aria-label="打开个人资料菜单"][aria-expanded="true"] {
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 10%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--codex-plus-accent, #277d91) 24%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"] {
+  border-color: color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 30%, var(--color-token-border-default, transparent)) !important;
+  background:
+    linear-gradient(
+      155deg,
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 18%, transparent),
+      color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 14%, transparent)
+    ),
+    color-mix(in srgb, var(--color-token-menu-background, #20272e) 91%, transparent) !important;
+  color: var(--color-token-text-primary, #f3f6f8) !important;
+  box-shadow:
+    0 20px 40px rgb(0 0 0 / 0.42),
+    0 3px 10px color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 28%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.1) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  [role="menuitem"] {
+  color: var(--color-token-text-primary, #f3f6f8) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:first-child {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 18%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:first-child > div > span:last-child {
+  color: var(--codex-plus-highlight, #8fd0dc) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  body:has(button[aria-label="打开个人资料菜单"][aria-expanded="true"])
+  [data-radix-menu-content][role="menu"]
+  > div > [role="menuitem"]:nth-child(2) {
+  color: var(--color-token-text-secondary, #b9cbd1) !important;
+}
+
+/* Native diff review surface (26.818+). Keep the code preview clipped to a
+   themed radius while preserving the native red/green diff rows and scrolling. */
+:root[data-codex-pokedex-theme="on"]
+  div[class*="electron:bg-surface"]:has([class*="group/file-diff"]) {
+  box-sizing: border-box !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 28%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  border-radius: 12px !important;
+  background-clip: padding-box !important;
+  background-color: var(--color-codex-diff-surface, var(--color-surface)) !important;
+  overflow: hidden auto !important;
+  clip-path: inset(0 round 12px) !important;
+}
+
+/* Code preview hosts should wrap their diff content instead of inheriting the
+   native full-height utility. Keep the host as the scroll boundary while
+   letting the rounded theme surface and inner diff card own natural height. */
+:root[data-codex-pokedex-theme="on"]
+  div[class*="electron:bg-surface"]:has([class*="group/file-diff"]) {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  flex: 0 1 auto !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  overflow: hidden auto !important;
+}
+
+/* The dedicated review host is a horizontal flex item. Preserve its panel
+   width, but stop the parent cross-axis stretch from making short previews
+   occupy the whole viewport; long diffs remain scrollable within the parent. */
+:root[data-codex-pokedex-theme="on"] #review-diffs-open {
+  box-sizing: border-box !important;
+  height: auto !important;
+  min-height: 0 !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 28%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  border-radius: 12px !important;
+  background-clip: padding-box !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  overflow: hidden auto !important;
+  clip-path: inset(0 round 12px) !important;
+  flex: 1 1 0% !important;
+  align-self: flex-start !important;
+  max-height: 100% !important;
+}
+
+:root[data-codex-pokedex-theme="on"] :is(
+  [class*="group/file-diff"],
+  [data-pierre-editor-surface]
+) {
+  box-sizing: border-box !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  flex: 0 1 auto !important;
+  --codex-diffs-surface-override: var(--color-codex-diff-surface) !important;
+  --codex-diffs-surface: var(--color-codex-diff-surface) !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 20%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  border-radius: 12px !important;
+  background-clip: padding-box !important;
+  background-color: var(--color-codex-diff-surface, var(--color-surface)) !important;
+  background-image: none !important;
+  overflow: hidden !important;
+  clip-path: inset(0 round 12px) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="group/file-diff"]
+  > [role="presentation"] {
+  height: auto !important;
+  min-height: 0 !important;
+  border-top-left-radius: 11px !important;
+  border-top-right-radius: 11px !important;
+  overflow: hidden !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="group/file-diff"]
+  > [class*="overflow-hidden"],
+:root[data-codex-pokedex-theme="on"]
+  [class*="group/file-diff"]
+  > [class*="overflow-hidden"]
+  > [class*="overflow-clip"] {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  flex: 0 1 auto !important;
+  border-bottom-left-radius: 11px !important;
+  border-bottom-right-radius: 11px !important;
+  overflow: hidden !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="group/file-diff"]
+  :is(diffs-container, [class*="diffs-container"]),
+:root[data-codex-pokedex-theme="on"]
+  [data-pierre-editor-surface]
+  :is(diffs-container, [class*="diffs-container"]) {
+  box-sizing: border-box !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  flex: 0 1 auto !important;
+  --codex-diffs-surface: var(--color-codex-diff-surface) !important;
+  background-color: var(--color-codex-diff-surface, var(--color-surface)) !important;
+  border-radius: 10px !important;
+  overflow: auto !important;
+  scrollbar-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 54%, transparent) transparent !important;
+}
+
+/* The file list is a single rounded stack; only its outer rows receive corner
+   radii so the file-to-file separators and keyboard focus remain intact. */
+:root[data-codex-pokedex-theme="on"] [class*="turn-diff-file-row"] > button {
+  border-radius: 0 !important;
+  overflow: hidden !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="turn-diff-file-row"]:first-child
+  > button {
+  border-top-left-radius: 10px !important;
+  border-top-right-radius: 10px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="turn-diff-file-row"]:last-child
+  > button {
+  border-bottom-left-radius: 10px !important;
+  border-bottom-right-radius: 10px !important;
+}
+
+/* 26.825+ wraps each file action in a contents span. Keep the same stack
+   corners when that wrapper is present. */
+:root[data-codex-pokedex-theme="on"]
+  [class*="turn-diff-file-row"]
+  > [class*="contents"]
+  > button {
+  border-radius: 0 !important;
+  overflow: hidden !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="turn-diff-file-row"]:first-child
+  > [class*="contents"]
+  > button {
+  border-top-left-radius: 10px !important;
+  border-top-right-radius: 10px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [class*="turn-diff-file-row"]:last-child
+  > [class*="contents"]
+  > button {
+  border-bottom-left-radius: 10px !important;
+  border-bottom-right-radius: 10px !important;
+}
+
+/* Let the native addition/deletion backgrounds meet the clipped code surface
+   cleanly without painting over their semantic red/green colors. */
+:root[data-codex-pokedex-theme="on"]
+  [class*="group/file-diff"]
+  :is(
+    [class*="bg-[var(--color-codex-diff-added)]"],
+    [class*="bg-[var(--color-codex-diff-deleted)]"]
+  ) {
+  border-radius: 0 !important;
+}
+
+/* Native changed-file summary (26.825+). Keep the review card calm and
+   readable when the updated surface tokens resolve to a saturated blue. */
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  div:has(> [class*="group/turn-diff-header"]) {
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #277d91) 20%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  border-radius: 12px !important;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 5%, #fff 95%),
+      color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 4%, #f5fbff 96%)
+    ) !important;
+  box-shadow:
+    0 10px 24px rgb(31 71 92 / 0.08),
+    inset 0 1px 0 rgb(255 255 255 / 0.72) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.05) !important;
+  backdrop-filter: blur(14px) saturate(1.05) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  div:has(> [class*="group/turn-diff-file-row"]) {
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #277d91) 14%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 3%, #f8fcff 97%) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  div:has(> [class*="group/turn-diff-header"])
+  > [class*="group/turn-diff-header"] {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 4%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  > [class*="group/turn-diff-header"]
+  > span {
+  min-height: 56px !important;
+  padding: 10px 12px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  > [class*="group/turn-diff-header"]
+  > span
+  > span:first-child {
+  width: 34px !important;
+  height: 34px !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #277d91) 16%, transparent) !important;
+  border-radius: 9px !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 9%, transparent) !important;
+  color: var(--codex-plus-accent, #277d91) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-header"]
+  span[class*="font-medium"] {
+  color: var(--color-token-text-primary, #163842) !important;
+  font-weight: 650 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-header"]
+  span[class*="text-secondary"] {
+  color: var(--color-token-text-secondary, #55717b) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-header"]
+  > span
+  + div
+  button {
+  min-height: 30px !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #277d91) 16%, transparent) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 5%, transparent) !important;
+  color: var(--color-token-text-secondary, #55717b) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-header"]
+  > span
+  + div
+  button:last-child {
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 26%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 10%, transparent) !important;
+  color: var(--codex-plus-accent-dark, #175263) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-header"]
+  > span
+  + div
+  button:is(:hover, :focus-visible) {
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 34%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 14%, transparent) !important;
+  color: var(--codex-plus-accent-dark, #175263) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="border-t"][class*="turn-diff"],
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="border-t"] {
+  border-top-color: color-mix(in srgb, var(--codex-plus-accent, #277d91) 12%, transparent) !important;
+  background: transparent !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  button {
+  box-sizing: border-box !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border-top: 1px solid color-mix(in srgb, var(--codex-plus-accent, #277d91) 8%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 3%, transparent) !important;
+  color: var(--color-token-text-primary, #163842) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="group/turn-diff-file-row"]
+  button {
+  box-sizing: border-box !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border-top: 1px solid color-mix(in srgb, var(--codex-plus-accent, #277d91) 8%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 3%, transparent) !important;
+  color: var(--color-token-text-primary, #163842) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  button:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 10%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="group/turn-diff-file-row"]
+  button:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 10%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  [class*="text-codex-description"] {
+  color: var(--color-token-text-tertiary, #6e8991) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  [class*="text-codex-git-added"] {
+  color: #17804d !important;
+  font-weight: 650 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  [class*="text-codex-git-deleted"] {
+  color: #b33a3a !important;
+  font-weight: 650 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="text-codex-git-added"] {
+  color: #17804d !important;
+  font-weight: 650 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="text-codex-git-deleted"] {
+  color: #b33a3a !important;
+  font-weight: 650 !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-header"]) {
+  border-color: color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 24%, var(--color-token-border-default, transparent)) !important;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--codex-plus-accent, #277d91) 14%, #202a32 86%),
+      color-mix(in srgb, var(--codex-plus-accent-dark, #175263) 12%, #171d24 88%)
+    ) !important;
+  box-shadow:
+    0 12px 28px rgb(0 0 0 / 0.3),
+    inset 0 1px 0 rgb(255 255 255 / 0.08) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-file-row"]) {
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 18%, transparent) !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 8%, #1d252d 92%) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  button {
+  border-top-color: color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 12%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 6%, transparent) !important;
+  color: var(--color-token-text-primary, #f3f6f8) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="group/turn-diff-file-row"]
+  button {
+  box-sizing: border-box !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border-top: 1px solid color-mix(in srgb, var(--codex-plus-highlight, #8fd0dc) 12%, transparent) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 6%, transparent) !important;
+  color: var(--color-token-text-primary, #f3f6f8) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  button:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 16%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="group/turn-diff-file-row"]
+  button:is(:hover, :focus-visible) {
+  background: color-mix(in srgb, var(--codex-plus-accent, #277d91) 16%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  [class*="text-codex-git-added"] {
+  color: #54c98b !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-header"])
+  [class*="group/turn-diff-file-row"]
+  [class*="text-codex-git-deleted"] {
+  color: #ff7777 !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="text-codex-git-added"] {
+  color: #54c98b !important;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark
+  div:has(> [class*="group/turn-diff-file-row"])
+  [class*="text-codex-git-deleted"] {
+  color: #ff7777 !important;
 }

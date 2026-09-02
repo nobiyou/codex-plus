@@ -608,7 +608,7 @@ export function DashboardView({
             <header>
               <span>{text("模型与 Token 用量", "Model and token usage")}</span>
               {projectUsage ? (
-                <b>{shortDate(projectUsage.from, locale)} – {shortDate(projectUsage.to, locale)}</b>
+                <b>{shortDate(projectUsage.from, locale)} - {shortDate(projectUsage.to, locale)}</b>
               ) : null}
             </header>
             {projectUsage ? (
@@ -641,44 +641,44 @@ export function DashboardView({
                       - (usageModelOrder.get(right.model) ?? Number.MAX_SAFE_INTEGER)
                     ));
                     return (
-                    <div
-                      className="dashboard-usage-day"
-                      key={day.date}
-                      tabIndex={0}
-                      role="img"
-                      aria-label={text(
-                        `${usageDayLabel(day, locale)} · ${formatTokenCount(day.totals.totalTokens)} Token · ${day.models.length} 个模型`,
-                        `${usageDayLabel(day, locale)} · ${formatTokenCount(day.totals.totalTokens)} tokens · ${day.models.length} models`,
-                      )}
-                    >
-                      <div className="dashboard-usage-bar">
-                        {dayModels.map((model) => (
-                          <i
-                            className="dashboard-usage-segment"
-                            key={model.model}
-                            style={{
-                              height: `${(model.totals.totalTokens / usageMaximum) * 100}%`,
-                              background: usageModelColor(model.model),
-                            }}
-                          />
-                        ))}
-                      </div>
-                      <span className={dayIndex % 5 === 0 || dayIndex === usageDays.length - 1 ? "is-visible" : ""}>
-                        {usageDayLabel(day, locale)}
-                      </span>
-                      <div className="dashboard-usage-tooltip" role="tooltip">
-                        <strong>{usageDayLabel(day, locale)}</strong>
-                        {dayModels.length ? dayModels.map((model) => (
-                          <span key={model.model}>
-                            <i style={{ background: usageModelColor(model.model) }} />
-                            <em>{usageModelLabel(model)}</em>
-                            <b>{formatTokenCount(model.totals.totalTokens)} · {usagePercent(model.totals.totalTokens, day.totals.totalTokens)}%</b>
-                          </span>
-                        )) : (
-                          <small>{text("无用量", "No usage")}</small>
+                      <div
+                        className="dashboard-usage-day"
+                        key={day.date}
+                        tabIndex={0}
+                        role="img"
+                        aria-label={text(
+                          `${usageDayLabel(day, locale)} · ${formatTokenCount(day.totals.totalTokens)} Token · ${day.models.length} 个模型`,
+                          `${usageDayLabel(day, locale)} · ${formatTokenCount(day.totals.totalTokens)} tokens · ${day.models.length} models`,
                         )}
+                      >
+                        <div className="dashboard-usage-bar">
+                          {dayModels.map((model) => (
+                            <i
+                              className="dashboard-usage-segment"
+                              key={model.model}
+                              style={{
+                                height: `${(model.totals.totalTokens / usageMaximum) * 100}%`,
+                                background: usageModelColor(model.model),
+                              }}
+                            />
+                          ))}
+                        </div>
+                        <span className={dayIndex % 5 === 0 || dayIndex === usageDays.length - 1 ? "is-visible" : ""}>
+                          {usageDayLabel(day, locale)}
+                        </span>
+                        <div className="dashboard-usage-tooltip" role="tooltip">
+                          <strong>{usageDayLabel(day, locale)}</strong>
+                          {dayModels.length ? dayModels.map((model) => (
+                            <span key={model.model}>
+                              <i style={{ background: usageModelColor(model.model) }} />
+                              <em>{usageModelLabel(model)}</em>
+                              <b>{formatTokenCount(model.totals.totalTokens)} · {usagePercent(model.totals.totalTokens, day.totals.totalTokens)}%</b>
+                            </span>
+                          )) : (
+                            <small>{text("无用量", "No usage")}</small>
+                          )}
+                        </div>
                       </div>
-                    </div>
                     );
                   })}
                 </div>
@@ -687,7 +687,7 @@ export function DashboardView({
               <div className="dashboard-empty">
                 {usageLoadFailed
                   ? text("暂无可读取的本机 Codex session 用量", "No readable local Codex session usage")
-                  : text("正在读取本机 Codex session 用量…", "Reading local Codex session usage…")}
+                  : text("正在读取本机 Codex session 用量...", "Reading local Codex session usage...")}
               </div>
             )}
           </section>
@@ -722,7 +722,7 @@ export function DashboardView({
                 >
                   <span className="dashboard-attention-mark" aria-hidden="true"><i /></span>
                   <strong>{task.title}</strong>
-                  <small>ID: {task.identifier}</small>
+                  <small>ID: {task.externalKey ?? task.identifier}</small>
                 </button>
               )) : (
                 <div className="dashboard-empty">{text("当前没有需要关注的议题", "No issues need attention")}</div>
@@ -734,13 +734,20 @@ export function DashboardView({
             <header><span>{text("运行中对话", "Active conversations")}</span></header>
             <div className="dashboard-task-list">
               {runningTasks.length ? runningTasks.map((task) => (
-                <article className="dashboard-running-card" key={task.id}>
+                <article
+                  className="dashboard-running-card"
+                  key={task.id}
+                  onClick={() => onOpenTask(task)}
+                >
                   <button
                     type="button"
                     className="dashboard-running-open"
-                    onClick={() => onOpenTask(task)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenTask(task);
+                    }}
                   >
-                    <small>ID: {task.identifier}</small>
+                    <small>ID: {task.externalKey ?? task.identifier}</small>
                     <strong>{task.title}</strong>
                   </button>
                   <div className="dashboard-running-footer">
@@ -861,7 +868,7 @@ export function DashboardView({
                     aria-hidden="true"
                   />
                   <strong>{task.title}</strong>
-                  <time>ID: {task.identifier} | {shortDate(task.dueDate!, locale)}</time>
+                  <time>ID: {task.externalKey ?? task.identifier} | {shortDate(task.dueDate!, locale)}</time>
                 </button>
               )) : (
                 <div className="dashboard-empty">{text("近期没有到期议题", "No issues are due soon")}</div>
