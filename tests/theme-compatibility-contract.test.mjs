@@ -134,6 +134,14 @@ test("theme rounds native diff previews while preserving their scroll and diff r
   assert.doesNotMatch(diffScrollHostBlock, /max-height:\s*min\(70vh, 680px\)\s*!important/);
   assert.match(styles, /background-color:\s*var\(--color-codex-diff-surface/);
   assert.match(styles, /var\(--codex-plus-accent/);
+  assert.match(
+    diffSurfaceBlock,
+    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\)/,
+  );
+  assert.match(
+    diffSurfaceBlock,
+    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\)[\s\S]*\[class\*="overflow-clip"\]/,
+  );
 });
 
 test("theme gives the changed-file summary a calm accent-aware surface", async () => {
@@ -149,6 +157,16 @@ test("theme gives the changed-file summary a calm accent-aware surface", async (
   assert.match(styles, /\.electron-dark[\s\S]*group\/turn-diff-file-row/);
 });
 
+test("theme scopes compatibility fallbacks to declared Codex semantic hosts", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+
+  assert.match(styles, /data-codex-plus-compat-sidebar="fallback"/);
+  assert.match(styles, /data-codex-plus-compat-composer="fallback"/);
+  assert.match(styles, /data-codex-plus-compat-diff-preview="fallback"/);
+  assert.match(styles, /data-codex-plus-compat-diff-preview="fallback"[\s\S]*group\/file-diff/);
+  assert.match(styles, /data-codex-plus-compat-composer="fallback"[\s\S]*data-composer-utility-bar-scroll-area/);
+});
+
 test("theme gives light action buttons a pale accent surface", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
 
@@ -160,4 +178,32 @@ test("theme gives light action buttons a pale accent surface", async () => {
   assert.match(styles, /button:not\(:has\(svg\)\):focus-visible/);
   assert.match(styles, /button\[class\*="rounded-full"\]:not\(\.composer-surface-chrome button\):not\(\[class\*="Composer"\] button\)/);
   assert.match(styles, /\[class\*="rounded-full"\]\[class\*="border"\]:not\(\.composer-surface-chrome \*\):not\(\[class\*="Composer"\] \*\)/);
+});
+
+test("compatibility settings keep a polished five-segment desktop control", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const polishBlock = styles.slice(styles.lastIndexOf("/* Settings polish:"));
+
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-categories[\s\S]*grid-auto-flow:\s*column/);
+  assert.match(polishBlock, /grid-auto-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(polishBlock, /grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-category\[data-selected="true"\]/);
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-status::before/);
+  assert.match(polishBlock, /@media \(max-width: 700px\)[\s\S]*scroll-snap-type:\s*inline mandatory/);
+});
+
+test("theme gives filled buttons readable foregrounds and quiet disabled states", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const buttonBlock = styles.slice(styles.lastIndexOf("/* Button contrast polish:"));
+
+  assert.match(buttonBlock, /--codex-plus-action-bg:/);
+  assert.match(buttonBlock, /\.codex-plus-pro-compatibility-repair:not\(:disabled\)/);
+  assert.match(buttonBlock, /\.codex-plus-pro-compatibility-repair:disabled[\s\S]*background-image: none !important/);
+  assert.match(buttonBlock, /aside:has\(img\[src\*="bidi-homepage-banner-orb"\]\) button:not\(:has\(svg\)\)/);
+  assert.match(buttonBlock, /\[aria-label="开始新的语音聊天"\]/);
+  assert.match(buttonBlock, /\[aria-label="听写"\]/);
+  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*color: var\(--codex-plus-action-fg\)/);
+  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*-webkit-text-fill-color: var\(--codex-plus-action-fg\)/);
+  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*background-image: linear-gradient/);
+  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-switch-thumb[\s\S]*background: #ffffff !important/);
 });

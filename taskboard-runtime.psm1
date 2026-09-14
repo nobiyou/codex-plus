@@ -817,6 +817,11 @@ function Start-CodexPlusTaskboard {
   $currentStatus = Get-CodexPlusTaskboardStatus -Root $Root -Port $Port -NodePath $NodePath -StateRoot $StateRoot
   $resolvedStateRoot = Resolve-CodexPlusTaskboardStateRoot -StateRoot $StateRoot -Create
   $recordedStatus = Get-CodexPlusTaskboardRecordedProcessStatus -StateRoot $resolvedStateRoot
+  if ($null -eq $recordedStatus -and -not [string]::IsNullOrWhiteSpace((Read-CodexPlusTaskboardStateValue -StateRoot $resolvedStateRoot -Name "pid.txt"))) {
+    # Start recovery may discard unowned metadata after ownership validation; it
+    # must never stop the unrelated process occupying the recorded PID.
+    Remove-CodexPlusTaskboardStateFiles -StateRoot $resolvedStateRoot
+  }
   $restartPort = 0
   if ($Port -ne 0) {
     $restartPort = $Port

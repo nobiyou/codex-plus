@@ -1,8 +1,8 @@
-# Codex Plus Pro for Windows (Scope B2) 1.8.5
+# Codex Plus Pro for Windows (Scope B2) 1.8.6
 
 Theme-oriented Windows launcher for official Microsoft Store ChatGPT / Codex (`OpenAI.Codex`) with Codex Plus Pro UI enhancements and local official MSIX version management.
 
-**Status: Scope B2 1.8.5** — theme + accent + wallpaper/logo + light/dark + flat model picker + official pet show/hide control + official MSIX local-version upgrade.
+**Status: Scope B2 1.8.6** — theme + accent + wallpaper/logo + light/dark + flat model picker + official pet show/hide control + compatibility checklist + button contrast polish + official MSIX local-version upgrade.
 Picture-in-picture has been removed.
 
 ## Requirements

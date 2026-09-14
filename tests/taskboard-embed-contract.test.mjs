@@ -218,7 +218,7 @@ test("Taskboard service settings stay on the host-owned runtime path", async () 
   assert.doesNotMatch(injectorSource, /Import-Module -LiteralPath/);
   assert.match(injectorSource, /function normalizeTaskboardServiceStatus\(/);
   assert.match(injectorSource, /function redactTaskboardServiceText\(/);
-  assert.match(injectorSource, /const SETTINGS_UI_VERSION = "win-settings-scope-b2-1\.8\.5-taskboard-service-v1"/);
+  assert.match(injectorSource, /const SETTINGS_UI_VERSION = "win-settings-scope-b2-1\.8\.6-taskboard-service-compatibility-v2"/);
   assert.match(injectorSource, /key: "taskboard", label: "任务面板"/);
   assert.match(injectorSource, /重启 Taskboard/);
   assert.match(injectorSource, /复制诊断/);

@@ -1,5 +1,20 @@
 # Codex Plus Pro Windows — Release Notes
 
+## 1.8.6 (compatibility checklist and theme polish)
+
+**Status:** Adds route-aware Codex UI compatibility checks and refines the updated theme surfaces and button contrast.
+
+### New
+
+- Settings → **界面兼容性**: categorized checks for global, conversation, programming, and settings surfaces.
+- Targeted reapply/fallback actions for selectors affected by Codex UI updates.
+- Versioned compatibility state and accessible status/repair controls.
+
+### Improved
+
+- Atomic stylesheet application with a bounded CDP chunk fallback.
+- Button backgrounds and text contrast across voice, dictation, model picker, and compatibility controls.
+
 ## 1.8.5 (official pet show/hide control)
 
 **Status:** Aligns the settings panel pet switch with the official avatar-overlay control path.

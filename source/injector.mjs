@@ -47,7 +47,7 @@ let hostFeatureSettings = {
   petMotion: "full",
   modelDensity: "compact",
 };
-const WINDOWS_SCOPE_A_VERSION = "1.8.5";
+const WINDOWS_SCOPE_A_VERSION = "1.8.6";
 const scriptVersion = WINDOWS_SCOPE_A_VERSION + " (Scope B2 pet - Windows)";
 const hostVersionInfo = normalizeVersionInfo({
   plusVersion: options["plus-version"] ?? WINDOWS_SCOPE_A_VERSION,
@@ -3053,8 +3053,47 @@ async function applyThemeAssets(send, wallpaperDataUri, logoDataUri, accentAsset
 }
 
 async function applyCssInChunks(send, cssText) {
-  const chunkSize = 4000;
-  // reset style content
+  const CSS_CHUNK_SIZE = 32768;
+  const startedAt = Date.now();
+  let atomicFailure = null;
+
+  // One textContent assignment lets the browser parse and apply the stylesheet once.
+  // Keep a bounded chunk fallback for older CDP hosts that reject larger evaluate payloads.
+  try {
+    const evalResult = await send("Runtime.evaluate", {
+      expression: `(() => {
+        const STYLE_ID = "codex-pokedex-theme-style";
+        const cssText = ${JSON.stringify(cssText)};
+        let style = document.getElementById(STYLE_ID);
+        if (!style) {
+          style = document.createElement("style");
+          style.id = STYLE_ID;
+          (document.head || document.documentElement).appendChild(style);
+        }
+        if (style.textContent === cssText) {
+          return { ok: true, skipped: true, length: cssText.length };
+        }
+        style.textContent = cssText;
+        return { ok: style.textContent.length === cssText.length, skipped: false, length: style.textContent.length };
+      })()`,
+      returnByValue: true,
+    });
+    if (evalResult.exceptionDetails) {
+      throw new Error(evalResult.exceptionDetails.exception?.description ?? "Atomic CSS apply failed");
+    }
+    const result = evalResult.result?.value;
+    if (!result?.ok) throw new Error("Atomic CSS length verification failed");
+    log(
+      result.skipped
+        ? `CSS already applied (${cssText.length} chars)`
+        : `CSS applied atomically (${cssText.length} chars, ${Date.now() - startedAt}ms)`,
+    );
+    return;
+  } catch (error) {
+    atomicFailure = error;
+  }
+
+  log(`Atomic CSS apply failed (${atomicFailure.message}); falling back to chunks`);
   await send("Runtime.evaluate", {
     expression: `(() => {
       const STYLE_ID = "codex-pokedex-theme-style";
@@ -3065,14 +3104,13 @@ async function applyCssInChunks(send, cssText) {
         (document.head || document.documentElement).appendChild(style);
       }
       style.textContent = "";
-      // Leave theme/feature attributes to bootstrap/settings apply so user choices persist.
       return true;
     })()`,
     returnByValue: true,
   });
 
-  for (let offset = 0; offset < cssText.length; offset += chunkSize) {
-    const chunk = cssText.slice(offset, offset + chunkSize);
+  for (let offset = 0; offset < cssText.length; offset += CSS_CHUNK_SIZE) {
+    const chunk = cssText.slice(offset, offset + CSS_CHUNK_SIZE);
     const evalResult = await send("Runtime.evaluate", {
       expression: `(() => {
         const style = document.getElementById("codex-pokedex-theme-style");
@@ -3086,12 +3124,13 @@ async function applyCssInChunks(send, cssText) {
       throw new Error(evalResult.exceptionDetails.exception?.description ?? "CSS chunk failed");
     }
   }
-  log(`CSS applied in chunks (${cssText.length} chars)`);
+  log(`CSS applied in chunks (${cssText.length} chars, ${Date.now() - startedAt}ms)`);
 }
 
 
 // Original mac settings/runtime UI (theme-focused on Windows A).
-// CSS is applied separately via applyCssInChunks to avoid huge CDP payloads.
+// CSS is applied atomically via applyCssInChunks, with a bounded fallback for CDP hosts
+// that reject the full stylesheet payload.
 // -----------------------------------------------------------------------------
 // Windows Scope B2 contract:
 // - Theme, accent, wallpaper/logo, flat model picker, and pet are user-controllable.
@@ -3126,7 +3165,7 @@ function buildInjectionSource(css) {
     const OFFICIAL_UPGRADE_BINDING = "__codexPlusProOfficialUpgrade";
     const VERSION_CHECK_BINDING = "__codexPlusProVersionCheck";
     const MANAGED_VERSION_CLEANUP_BINDING = "__codexPlusProManagedVersionCleanup";
-    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.5-taskboard-service-v1";
+    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.6-taskboard-service-compatibility-v2";
     const VERSION_INFO = ${JSON.stringify(hostVersionInfo)};
     const FEATURE_ATTRIBUTES = {
       theme: "data-codex-plus-theme",
@@ -3556,6 +3595,396 @@ function buildInjectionSource(css) {
     let taskboardServiceRequestPromise = null;
     let hotkeyServicesPromise = null;
     let refreshFrame = 0;
+    const COMPATIBILITY_CHECKLIST_VERSION = "ui-compatibility-v1";
+    const COMPATIBILITY_CATEGORIES = Object.freeze([
+      { key: "all", label: "全部" },
+      { key: "global", label: "全局" },
+      { key: "conversation", label: "对话界面" },
+      { key: "programming", label: "编程界面" },
+      { key: "settings", label: "设置界面" },
+    ]);
+    const COMPATIBILITY_STATUS_LABELS = Object.freeze({
+      healthy: "正常",
+      degraded: "已降级",
+      fallbackActive: "备用规则生效",
+      notObserved: "未观察到",
+      unsupported: "不支持",
+    });
+    const COMPATIBILITY_ITEMS = Object.freeze([
+      {
+        id: "global.shell",
+        category: "global",
+        label: "主壳与主内容区",
+        description: "Codex 主壳、主内容背景和页面边界的主题外壳。",
+        anchors: [
+          { name: "main-surface", selector: ".main-surface" },
+          { name: "main-content-surface", selector: '[class*="MainContentSurface"]' },
+        ],
+        styleProbe: "theme-root",
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "global.header",
+        category: "global",
+        label: "顶部栏",
+        description: "顶部导航、搜索和 Codex 窗口操作区域。",
+        anchors: [
+          { name: "header-tint", selector: ".app-header-tint" },
+          { name: "safe-header-left", selector: '[class*="spacing-token-safe-header-left"]' },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "global.sidebar",
+        category: "global",
+        label: "左侧导航",
+        description: "项目、会话和任务面板所在的侧边导航。",
+        anchors: [
+          { name: "app-shell-sidebar", selector: ".app-shell-left-panel" },
+          { name: "sidebar-navigation", selector: "nav.sidebar-foreground-muted" },
+        ],
+        fallbackAttribute: "data-codex-plus-compat-sidebar",
+        risk: "high",
+        repair: "reapply-and-enable-fallback",
+      },
+      {
+        id: "global.status-surfaces",
+        category: "global",
+        label: "用量、配额和提示条",
+        description: "用量提醒、配额状态和页面提示消息的主题表面。",
+        anchors: [
+          { name: "alert", selector: '[role="alert"]' },
+          { name: "usage-banner", selector: '[class*="usage-banner"]' },
+          { name: "quota", selector: '[class*="quota"]' },
+        ],
+        risk: "low",
+        repair: "reapply",
+      },
+      {
+        id: "global.scrollbars",
+        category: "global",
+        label: "页面滚动条",
+        description: "侧栏、主内容区和弹层滚动条的主题颜色与宽度。",
+        anchors: [
+          { name: "document", selector: "body" },
+          { name: "root", selector: "#root" },
+        ],
+        styleProbe: "theme-root",
+        risk: "low",
+        repair: "reapply",
+      },
+      {
+        id: "conversation.home-suggestions",
+        category: "conversation",
+        label: "首页建议区",
+        description: "首页建议卡片和快捷入口的主题表面。",
+        anchors: [
+          { name: "home-suggestions", selector: '[class~="group/home-suggestions"]' },
+          { name: "suggestion-item", selector: '[class*="home-suggestion-list-item"]' },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "conversation.composer",
+        category: "conversation",
+        label: "对话输入区",
+        description: "输入框、发送按钮和输入区工具栏的主题外壳。",
+        anchors: [
+          { name: "utility-bar", selector: "[data-composer-utility-bar-scroll-area]" },
+          { name: "contenteditable", selector: '[contenteditable="true"]' },
+          { name: "role-textbox", selector: '[role="textbox"]' },
+        ],
+        styleProbe: "composer-surface",
+        fallbackAttribute: "data-codex-plus-compat-composer",
+        risk: "high",
+        repair: "reapply-and-enable-fallback",
+      },
+      {
+        id: "conversation.utility-bar",
+        category: "conversation",
+        label: "项目、分支和本地工具栏",
+        description: "输入区上方的项目、分支、本地模式和工具按钮。",
+        anchors: [
+          { name: "utility-bar", selector: "[data-composer-utility-bar-scroll-area]" },
+          { name: "project-selector-icon", selector: "[data-project-selector-icon]" },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "conversation.thread-actions",
+        category: "conversation",
+        label: "对话操作区",
+        description: "发送、停止和对话线程内的操作按钮。",
+        anchors: [
+          { name: "thread-scroll-container", selector: ".thread-scroll-container" },
+          { name: "send-button", selector: 'button[aria-label="Send"]' },
+          { name: "submit-button", selector: 'button[aria-label="Submit"]' },
+          { name: "stop-button", selector: 'button[aria-label="Stop"]' },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "programming.editor",
+        category: "programming",
+        label: "编辑器表面",
+        description: "代码编辑器、代码输出和编辑器边界的主题表面。",
+        anchors: [
+          { name: "pierre-editor", selector: "[data-pierre-editor-surface]" },
+          { name: "code-editor", selector: '[class*="code-editor"]' },
+        ],
+        risk: "high",
+        repair: "reapply",
+      },
+      {
+        id: "programming.diff-preview",
+        category: "programming",
+        label: "Diff 预览容器",
+        description: "代码变更预览及其匿名全高布局宿主。",
+        anchors: [
+          { name: "file-diff", selector: '[class*="group/file-diff"]' },
+          { name: "diff-header", selector: '[class*="group/turn-diff-header"]' },
+        ],
+        fallbackAttribute: "data-codex-plus-compat-diff-preview",
+        risk: "high",
+        repair: "reapply-and-enable-fallback",
+      },
+      {
+        id: "programming.diff-file-row",
+        category: "programming",
+        label: "Diff 文件行",
+        description: "变更文件行、增删颜色和文件操作按钮。",
+        anchors: [
+          { name: "diff-file-row", selector: '[class*="group/turn-diff-file-row"]' },
+          { name: "git-added", selector: '[class*="text-codex-git-added"]' },
+          { name: "git-deleted", selector: '[class*="text-codex-git-deleted"]' },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "programming.run-status",
+        category: "programming",
+        label: "编程运行状态区",
+        description: "编程任务运行结果、状态和代码输出区域。",
+        anchors: [
+          { name: "turn-diff", selector: '[class*="turn-diff"]' },
+          { name: "status", selector: '[role="status"]' },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "settings.entry",
+        category: "settings",
+        label: "Plus Pro 设置入口",
+        description: "打开 Codex Plus Pro 设置面板的入口按钮。",
+        anchors: [
+          { name: "settings-button", selector: ".codex-plus-pro-settings-button" },
+          { name: "settings-host", selector: '[data-codex-plus-pro-settings-host="on"]' },
+        ],
+        risk: "high",
+        repair: "reapply",
+      },
+      {
+        id: "settings.navigation",
+        category: "settings",
+        label: "设置分区导航",
+        description: "主题、模型栏、任务面板和兼容性分区导航。",
+        anchors: [
+          { name: "settings-navigation", selector: ".codex-plus-pro-settings-navigation" },
+          { name: "settings-tab", selector: "[data-settings-section-target]" },
+        ],
+        styleProbe: "settings-popover",
+        risk: "high",
+        repair: "reapply",
+      },
+      {
+        id: "settings.content",
+        category: "settings",
+        label: "设置内容面板",
+        description: "当前设置分区的内容、控件和诊断信息。",
+        anchors: [
+          { name: "settings-content", selector: ".codex-plus-pro-settings-content" },
+          { name: "settings-section", selector: "[data-settings-section]" },
+        ],
+        styleProbe: "settings-popover",
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "settings.taskboard-service",
+        category: "settings",
+        label: "Taskboard 服务控制区",
+        description: "任务面板服务状态、重新检测、重启和诊断控件。",
+        anchors: [
+          { name: "taskboard-service", selector: ".codex-plus-pro-taskboard-service-control" },
+          { name: "taskboard-service-marker", selector: '[data-taskboard-service-control="true"]' },
+        ],
+        risk: "medium",
+        repair: "reapply",
+      },
+      {
+        id: "settings.version",
+        category: "settings",
+        label: "版本信息区",
+        description: "Codex、Plus Pro 和本机保留版本的状态信息。",
+        anchors: [
+          { name: "version-check", selector: '[data-version-check-control="true"]' },
+          { name: "managed-versions", selector: ".codex-plus-pro-managed-versions" },
+        ],
+        risk: "low",
+        repair: "reapply",
+      },
+    ]);
+    const COMPATIBILITY_STATUS_KEYS = new Set(Object.keys(COMPATIBILITY_STATUS_LABELS));
+    const compatibilityState = {
+      selectedCategory: "all",
+      results: [],
+      lastCheckedAt: "",
+      checking: false,
+      repairing: false,
+    };
+    const safeCompatibilityMatch = (anchors) => {
+      for (const anchor of anchors || []) {
+        try {
+          const matches = document.querySelectorAll(anchor.selector);
+          if (matches.length > 0) {
+            return {
+              name: anchor.name,
+              selector: anchor.selector,
+              count: matches.length,
+            };
+          }
+        } catch (error) {
+          console.warn("Codex Plus Pro compatibility selector skipped", anchor.selector, error);
+        }
+      }
+      return null;
+    };
+    const compatibilitySelectorsSupported = (anchors) => (anchors || []).some((anchor) => {
+      try {
+        document.querySelector(anchor.selector);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const runCompatibilityStyleProbe = (item) => {
+      if (!item.styleProbe) return { ok: true, reason: "未配置样式探针" };
+      if (item.styleProbe === "theme-root") {
+        const root = document.documentElement;
+        const style = document.getElementById(STYLE_ID);
+        const ok = root?.getAttribute(THEME_ATTRIBUTE) === "on" && Boolean(style);
+        return { ok, reason: ok ? "主题根节点和样式节点正常" : "主题根节点或样式节点未生效" };
+      }
+      if (item.styleProbe === "composer-surface") {
+        const ok = Boolean(document.querySelector("[" + COMPOSER_ATTRIBUTE + "]"));
+        return { ok, reason: ok ? "输入区已完成主题装饰" : "输入区主题装饰标记缺失" };
+      }
+      if (item.styleProbe === "settings-popover") {
+        const popover = document.querySelector(".codex-plus-pro-settings-popover");
+        const ok = Boolean(popover && !popover.hidden);
+        return { ok, reason: ok ? "设置弹窗已打开并完成注入" : "设置弹窗尚未打开" };
+      }
+      return { ok: true, reason: "样式探针通过" };
+    };
+    const evaluateCompatibilityItem = (item) => {
+      const matchedAnchor = safeCompatibilityMatch(item.anchors);
+      if (!matchedAnchor) {
+        const unsupported = !compatibilitySelectorsSupported(item.anchors);
+        const status = unsupported ? "unsupported" : "notObserved";
+        return {
+          id: item.id,
+          category: item.category,
+          status,
+          statusLabel: COMPATIBILITY_STATUS_LABELS[status],
+          matchedAnchor: null,
+          matchCount: 0,
+          probe: { ok: false, reason: "当前页面未观察到该界面元素" },
+          reason: unsupported
+            ? "当前 Codex DOM 未提供可识别的兼容锚点。"
+            : "该元素可能只在其他页面或打开对应面板后出现。",
+          repairAvailable: false,
+        };
+      }
+      const probe = runCompatibilityStyleProbe(item);
+      const fallbackActive = Boolean(
+        item.fallbackAttribute &&
+        document.documentElement?.getAttribute(item.fallbackAttribute) === "fallback",
+      );
+      const status = fallbackActive ? "fallbackActive" : probe.ok ? "healthy" : "degraded";
+      return {
+        id: item.id,
+        category: item.category,
+        status,
+        statusLabel: COMPATIBILITY_STATUS_LABELS[status],
+        matchedAnchor,
+        matchCount: matchedAnchor.count,
+        probe,
+        reason: fallbackActive
+          ? "已启用该元素的已知兼容备用规则。"
+          : probe.reason,
+        repairAvailable: item.repair === "reapply" || item.repair === "reapply-and-enable-fallback",
+      };
+    };
+    const runCompatibilityChecks = () => {
+      const results = COMPATIBILITY_ITEMS.map(evaluateCompatibilityItem);
+      compatibilityState.results = results;
+      compatibilityState.lastCheckedAt = new Date().toISOString();
+      return results;
+    };
+    const COMPATIBILITY_FALLBACK_ATTRIBUTES = new Set(
+      COMPATIBILITY_ITEMS.map((item) => item.fallbackAttribute).filter(Boolean),
+    );
+    const COMPATIBILITY_ITEM_BY_ID = new Map(COMPATIBILITY_ITEMS.map((item) => [item.id, item]));
+    const setCompatibilityFallback = (item, enabled) => {
+      const attribute = item?.fallbackAttribute;
+      if (!attribute || !COMPATIBILITY_FALLBACK_ATTRIBUTES.has(attribute)) return false;
+      const root = document.documentElement;
+      if (!root) return false;
+      if (enabled) root.setAttribute(attribute, "fallback");
+      else root.removeAttribute(attribute);
+      return true;
+    };
+    const runCompatibilityRepair = async (itemId) => {
+      const item = COMPATIBILITY_ITEM_BY_ID.get(itemId);
+      if (!item || !item.repair || compatibilityState.repairing) return null;
+      compatibilityState.repairing = true;
+      try {
+        if (item.fallbackAttribute) setCompatibilityFallback(item, true);
+        applyFeatureSettings(featureSettings, { persist: false, broadcast: false, notify: false });
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+        return runCompatibilityChecks();
+      } finally {
+        compatibilityState.repairing = false;
+      }
+    };
+    const runAllCompatibilityRepairs = async () => {
+      if (compatibilityState.repairing) return null;
+      compatibilityState.repairing = true;
+      try {
+        const results = compatibilityState.results.length ? compatibilityState.results : runCompatibilityChecks();
+        for (const result of results) {
+          const item = COMPATIBILITY_ITEM_BY_ID.get(result.id);
+          if (item?.fallbackAttribute && (result.status === "degraded" || result.status === "fallbackActive")) {
+            setCompatibilityFallback(item, true);
+          }
+        }
+        applyFeatureSettings(featureSettings, { persist: false, broadcast: false, notify: false });
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+        return runCompatibilityChecks();
+      } finally {
+        compatibilityState.repairing = false;
+      }
+    };
+    for (const statusKey of ["healthy", "degraded", "fallbackActive", "notObserved", "unsupported"]) {
+      if (!COMPATIBILITY_STATUS_KEYS.has(statusKey)) throw new Error("Unknown compatibility status: " + statusKey);
+    }
     const previousFlatPickerState = window.__codexPokedexFlatPickerState;
     if (previousFlatPickerState?.probeTimer) window.clearTimeout(previousFlatPickerState.probeTimer);
     const flatPickerState = previousFlatPickerState?.version === FLAT_PICKER_VERSION
@@ -3577,6 +4006,7 @@ function buildInjectionSource(css) {
       { key: "modelPicker", label: "模型栏", feature: "modelPicker" },
       { key: "pet", label: "宠物", feature: "pet" },
       { key: "taskboard", label: "任务面板", feature: "taskboard" },
+      { key: "compatibility", label: "界面兼容性", feature: "compatibility" },
       { key: "version", label: "版本", feature: "version" },
     ];
     const BOOLEAN_SETTINGS = new Set(["theme", "pet", "modelPicker"]);
@@ -4291,6 +4721,232 @@ function buildInjectionSource(css) {
       return control;
     };
 
+    const COMPATIBILITY_RISK_LABELS = Object.freeze({ low: "低", medium: "中", high: "高" });
+    const formatCompatibilityCheckTime = (value) => {
+      if (!value) return "尚未检测";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "检测时间不可用";
+      return date.toLocaleString("zh-CN", { hour12: false });
+    };
+    const compatibilityResultFor = (itemId) => compatibilityState.results.find((result) => result.id === itemId) || null;
+    const compatibilityRepairDisabled = (result) => (
+      !result?.repairAvailable ||
+      result.status === "notObserved" ||
+      result.status === "unsupported" ||
+      compatibilityState.checking ||
+      compatibilityState.repairing
+    );
+    const updateCompatibilityPanel = () => {
+      const panel = document.querySelector('[data-codex-plus-compatibility-panel="true"]');
+      if (!panel) return;
+      if (!compatibilityState.results.length) runCompatibilityChecks();
+      const results = compatibilityState.results;
+      const visibleItems = COMPATIBILITY_ITEMS.filter((item) => (
+        compatibilityState.selectedCategory === "all" || item.category === compatibilityState.selectedCategory
+      ));
+      const healthyCount = results.filter((result) => result.status === "healthy").length;
+      const degradedCount = results.filter((result) => result.status === "degraded").length;
+      const fallbackCount = results.filter((result) => result.status === "fallbackActive").length;
+      const notObservedCount = results.filter((result) => result.status === "notObserved").length;
+      const unsupportedCount = results.filter((result) => result.status === "unsupported").length;
+      const summary = panel.querySelector("[data-compatibility-summary]");
+      if (summary) {
+        summary.textContent = [
+          "已检查 " + results.length + " 项",
+          "正常 " + healthyCount,
+          "需处理 " + degradedCount,
+          "备用规则 " + fallbackCount,
+          "未观察 " + notObservedCount,
+          "不支持 " + unsupportedCount,
+        ].join(" · ");
+      }
+      const version = panel.querySelector("[data-compatibility-version]");
+      if (version) version.textContent = "Codex " + VERSION_INFO.appVersion + " · 清单 " + COMPATIBILITY_CHECKLIST_VERSION;
+      const checkedAt = panel.querySelector("[data-compatibility-checked-at]");
+      if (checkedAt) checkedAt.textContent = formatCompatibilityCheckTime(compatibilityState.lastCheckedAt);
+      for (const tab of panel.querySelectorAll("[data-compatibility-category]")) {
+        const selected = tab.getAttribute("data-compatibility-category") === compatibilityState.selectedCategory;
+        tab.setAttribute("aria-pressed", selected ? "true" : "false");
+        tab.setAttribute("data-selected", selected ? "true" : "false");
+      }
+      for (const action of panel.querySelectorAll("[data-compatibility-action]")) {
+        action.disabled = compatibilityState.checking || compatibilityState.repairing;
+      }
+      const list = panel.querySelector("[data-compatibility-list]");
+      if (!list) return;
+      list.replaceChildren();
+      for (const item of visibleItems) {
+        const result = compatibilityResultFor(item.id) || {
+          id: item.id,
+          status: "notObserved",
+          statusLabel: COMPATIBILITY_STATUS_LABELS.notObserved,
+          reason: "尚未检测",
+          repairAvailable: false,
+        };
+        const row = document.createElement("article");
+        row.className = "codex-plus-pro-compatibility-item";
+        row.setAttribute("data-compatibility-item", item.id);
+        row.setAttribute("data-compatibility-status", result.status);
+        const heading = document.createElement("div");
+        heading.className = "codex-plus-pro-compatibility-item-heading";
+        const title = document.createElement("div");
+        title.className = "codex-plus-pro-compatibility-item-title";
+        title.textContent = item.label;
+        const badge = document.createElement("span");
+        badge.className = "codex-plus-pro-compatibility-status";
+        badge.textContent = result.statusLabel || COMPATIBILITY_STATUS_LABELS.notObserved;
+        badge.setAttribute("data-compatibility-status-label", "true");
+        heading.append(title, badge);
+        const description = document.createElement("div");
+        description.className = "codex-plus-pro-compatibility-description";
+        description.textContent = item.description;
+        const metadata = document.createElement("div");
+        metadata.className = "codex-plus-pro-compatibility-metadata";
+        const risk = document.createElement("span");
+        risk.textContent = "风险 " + (COMPATIBILITY_RISK_LABELS[item.risk] || item.risk || "未知");
+        const anchor = document.createElement("span");
+        anchor.textContent = result.matchedAnchor
+          ? "锚点 " + result.matchedAnchor.name + " · " + result.matchedAnchor.count + " 个"
+          : "锚点 未匹配";
+        anchor.title = result.matchedAnchor?.selector || "当前页面未匹配到支持的锚点";
+        metadata.append(risk, anchor);
+        const reason = document.createElement("div");
+        reason.className = "codex-plus-pro-compatibility-reason";
+        reason.textContent = result.reason || "暂无诊断原因";
+        const actions = document.createElement("div");
+        actions.className = "codex-plus-pro-compatibility-actions";
+        const checkButton = document.createElement("button");
+        checkButton.type = "button";
+        checkButton.className = "codex-plus-pro-settings-upgrade";
+        checkButton.textContent = "重新检测";
+        checkButton.setAttribute("data-compatibility-item-check", item.id);
+        checkButton.setAttribute("aria-label", "重新检测 " + item.label);
+        checkButton.disabled = compatibilityState.checking || compatibilityState.repairing;
+        checkButton.addEventListener("click", () => {
+          compatibilityState.checking = true;
+          updateCompatibilityPanel();
+          runCompatibilityChecks();
+          compatibilityState.checking = false;
+          updateCompatibilityPanel();
+        });
+        const repairButton = document.createElement("button");
+        repairButton.type = "button";
+        repairButton.className = "codex-plus-pro-settings-upgrade codex-plus-pro-compatibility-repair";
+        repairButton.textContent = "修复此项";
+        repairButton.setAttribute("data-compatibility-item-repair", item.id);
+        repairButton.setAttribute("aria-label", "修复 " + item.label);
+        repairButton.disabled = compatibilityRepairDisabled(result);
+        repairButton.addEventListener("click", async () => {
+          compatibilityState.checking = true;
+          updateCompatibilityPanel();
+          try {
+            await runCompatibilityRepair(item.id);
+          } catch (error) {
+            console.warn("Codex Plus Pro compatibility repair failed", item.id, error);
+          } finally {
+            compatibilityState.checking = false;
+            updateCompatibilityPanel();
+          }
+        });
+        actions.append(checkButton, repairButton);
+        row.append(heading, description, metadata, reason, actions);
+        list.appendChild(row);
+      }
+    };
+    const refreshCompatibilityPanel = () => {
+      compatibilityState.checking = true;
+      updateCompatibilityPanel();
+      runCompatibilityChecks();
+      compatibilityState.checking = false;
+      updateCompatibilityPanel();
+    };
+    const repairAllCompatibilityItems = async () => {
+      compatibilityState.checking = true;
+      updateCompatibilityPanel();
+      try {
+        await runAllCompatibilityRepairs();
+      } catch (error) {
+        console.warn("Codex Plus Pro compatibility repair-all failed", error);
+      } finally {
+        compatibilityState.checking = false;
+        updateCompatibilityPanel();
+      }
+    };
+    const createCompatibilityPanel = () => {
+      const panel = document.createElement("div");
+      panel.className = "codex-plus-pro-compatibility-panel";
+      panel.setAttribute("role", "region");
+      panel.setAttribute("aria-label", "界面兼容性清单");
+      panel.setAttribute("data-codex-plus-compatibility-panel", "true");
+      const summary = document.createElement("div");
+      summary.className = "codex-plus-pro-compatibility-summary";
+      const summaryValue = document.createElement("div");
+      summaryValue.className = "codex-plus-pro-settings-text-value";
+      const summaryLine = document.createElement("div");
+      summaryLine.className = "codex-plus-pro-settings-text-value-primary";
+      summaryLine.setAttribute("aria-live", "polite");
+      summaryLine.setAttribute("data-compatibility-summary", "true");
+      const versionLine = document.createElement("div");
+      versionLine.className = "codex-plus-pro-settings-text-value-secondary";
+      versionLine.setAttribute("data-compatibility-version", "true");
+      summaryValue.append(summaryLine, versionLine);
+      const checkedLine = document.createElement("div");
+      checkedLine.className = "codex-plus-pro-compatibility-checked-at";
+      checkedLine.textContent = "尚未检测";
+      checkedLine.setAttribute("aria-live", "polite");
+      checkedLine.setAttribute("data-compatibility-checked-at", "true");
+      summary.append(summaryValue, checkedLine);
+      const actions = document.createElement("div");
+      actions.className = "codex-plus-pro-compatibility-toolbar";
+      const checkAllButton = document.createElement("button");
+      checkAllButton.type = "button";
+      checkAllButton.className = "codex-plus-pro-settings-upgrade";
+      checkAllButton.textContent = "全部检测";
+      checkAllButton.setAttribute("aria-label", "检测全部界面兼容性项目");
+      checkAllButton.setAttribute("data-compatibility-action", "check");
+      checkAllButton.addEventListener("click", refreshCompatibilityPanel);
+      const reapplyButton = document.createElement("button");
+      reapplyButton.type = "button";
+      reapplyButton.className = "codex-plus-pro-settings-upgrade";
+      reapplyButton.textContent = "重新应用主题";
+      reapplyButton.setAttribute("aria-label", "重新应用当前主题");
+      reapplyButton.setAttribute("data-compatibility-action", "reapply");
+      reapplyButton.addEventListener("click", () => {
+        applyFeatureSettings(featureSettings, { persist: false, broadcast: false, notify: false });
+        refreshCompatibilityPanel();
+      });
+      const repairAllButton = document.createElement("button");
+      repairAllButton.type = "button";
+      repairAllButton.className = "codex-plus-pro-settings-upgrade codex-plus-pro-compatibility-repair";
+      repairAllButton.textContent = "修复所有已知问题";
+      repairAllButton.setAttribute("aria-label", "修复所有已知界面兼容性问题");
+      repairAllButton.setAttribute("data-compatibility-action", "repair-all");
+      repairAllButton.addEventListener("click", () => void repairAllCompatibilityItems());
+      actions.append(checkAllButton, reapplyButton, repairAllButton);
+      const categoryControl = document.createElement("div");
+      categoryControl.className = "codex-plus-pro-settings-choices codex-plus-pro-compatibility-categories";
+      categoryControl.setAttribute("role", "group");
+      categoryControl.setAttribute("aria-label", "界面兼容性分类");
+      for (const category of COMPATIBILITY_CATEGORIES) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "codex-plus-pro-settings-choice codex-plus-pro-compatibility-category";
+        button.textContent = category.label;
+        button.setAttribute("data-compatibility-category", category.key);
+        button.setAttribute("aria-pressed", category.key === "all" ? "true" : "false");
+        button.addEventListener("click", () => {
+          compatibilityState.selectedCategory = category.key;
+          updateCompatibilityPanel();
+        });
+        categoryControl.appendChild(button);
+      }
+      const list = document.createElement("div");
+      list.className = "codex-plus-pro-compatibility-list";
+      list.setAttribute("data-compatibility-list", "true");
+      panel.append(summary, actions, categoryControl, list);
+      return panel;
+    };
+
     const activateSettingsSection = (popover, sectionKey) => {
       for (const tab of popover.querySelectorAll("[data-settings-section-target]")) {
         const selected = tab.getAttribute("data-settings-section-target") === sectionKey;
@@ -4301,6 +4957,7 @@ function buildInjectionSource(css) {
         panel.hidden = panel.getAttribute("data-settings-section") !== sectionKey;
       }
       if (sectionKey === "taskboard") void requestTaskboardServiceFromSettings("status");
+      if (sectionKey === "compatibility") refreshCompatibilityPanel();
     };
 
     const updateSettingsPanel = () => {
@@ -4354,6 +5011,7 @@ function buildInjectionSource(css) {
       if (popover) {
         const activeTab = popover.querySelector('[data-settings-section-target][aria-selected="true"]');
         if (!activeTab) activateSettingsSection(popover, "theme");
+        if (popover.querySelector('[data-settings-section="compatibility"]')) updateCompatibilityPanel();
       }
       if (button && popover) button.setAttribute("aria-expanded", popover.hidden ? "false" : "true");
       const backdrop = document.querySelector(".codex-plus-pro-settings-backdrop");
@@ -4398,7 +5056,7 @@ function buildInjectionSource(css) {
       title.textContent = "Codex Plus Pro";
       const subtitle = document.createElement("div");
       subtitle.className = "codex-plus-pro-settings-subtitle";
-      subtitle.textContent = "Windows 1.8.5 · 主题、模型栏、官方宠物开关与 MSIX";
+      subtitle.textContent = "Windows 1.8.6 · 主题、模型栏、官方宠物开关、兼容性清单与 MSIX";
       heading.append(title, subtitle);
       const closeButton = document.createElement("button");
       closeButton.type = "button";
@@ -4588,6 +5246,8 @@ function buildInjectionSource(css) {
           panel.append(
             createSettingsRow("服务", createTaskboardServiceControl()),
           );
+        } else if (item.key === "compatibility") {
+          panel.appendChild(createCompatibilityPanel());
         } else if (item.key === "version") {
           const sourceLabel = VERSION_INFO.appSource === "Appx"
             ? "Microsoft Store Appx"
@@ -5810,7 +6470,7 @@ function buildMainControllerSource() {
     const petShowGuards = new Map();
     const controller = {
       active: true,
-      version: "1.8.5",
+      version: "1.8.6",
       petWindowVisibility,
       petHiddenByUs,
       petShowGuards,

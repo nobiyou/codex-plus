@@ -130,10 +130,13 @@ $decoyServerRoot = Join-Path $decoyRoot "server"
 $stateRoot = Join-Path $tempRoot "state"
 $fallbackStateRoot = Join-Path $tempRoot "state-fallback-port"
 $customReuseStateRoot = Join-Path $tempRoot "state-reuse"
+$staleRecoveryStateRoot = Join-Path $tempRoot "state-stale-recovery"
 $localAppDataRoot = Join-Path $tempRoot "localappdata"
 $taskboardPointerDir = Join-Path $localAppDataRoot "Codex-Plus-Pro"
 $wrongProcess = $null
 $wrongProcessToken = $null
+$staleRecoveryProcess = $null
+$staleRecoveryProcessToken = $null
 $fakeNodeProcess = $null
 $fullPathDecoyProcess = $null
 $startedProcessIds = @()
@@ -149,6 +152,7 @@ try {
   New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
   New-Item -ItemType Directory -Path $fallbackStateRoot -Force | Out-Null
   New-Item -ItemType Directory -Path $customReuseStateRoot -Force | Out-Null
+  New-Item -ItemType Directory -Path $staleRecoveryStateRoot -Force | Out-Null
   New-Item -ItemType Directory -Path $taskboardPointerDir -Force | Out-Null
   $env:LOCALAPPDATA = $localAppDataRoot
 
@@ -313,6 +317,27 @@ process.on("SIGTERM", shutdown);
   $recordedStop = Stop-CodexPlusTaskboard -StateRoot $customReuseStateRoot
   Assert-Match $recordedStop.Reason "*was stopped*" "Recorded-start server should stop cleanly from the custom state root."
 
+  $staleRecoveryProcessToken = "stale-recovery-process-" + [guid]::NewGuid().ToString("N")
+  $staleRecoveryProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-Command", ("Start-Sleep -Seconds 60; Write-Output '{0}'" -f $staleRecoveryProcessToken)) -WindowStyle Hidden -PassThru
+  $staleRecoveryPort = Get-FreeTcpPort
+  Set-Content -LiteralPath (Join-Path $staleRecoveryStateRoot "pid.txt") -Value ([string]$staleRecoveryProcess.Id) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $staleRecoveryStateRoot "root.txt") -Value $taskboardRoot -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $staleRecoveryStateRoot "port.txt") -Value ([string]$staleRecoveryPort) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $staleRecoveryStateRoot "url.txt") -Value ("http://127.0.0.1:{0}" -f $staleRecoveryPort) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $staleRecoveryStateRoot "node.txt") -Value ((Get-Command node -ErrorAction Stop | Select-Object -First 1).Source) -Encoding ASCII
+  Set-Content -LiteralPath (Join-Path $staleRecoveryStateRoot "owner.txt") -Value "stale-owner-marker" -Encoding ASCII
+
+  $staleRecovery = Start-CodexPlusTaskboard -Root $taskboardRoot -Port $staleRecoveryPort -StateRoot $staleRecoveryStateRoot
+  $startedProcessIds += $staleRecovery.ProcessId
+  $startedOwnerMarkers[[int]$staleRecovery.ProcessId] = $staleRecovery.OwnerMarker
+  Assert-Equal $staleRecovery.Healthy $true "Start should recover from stale metadata when the recorded PID is not launcher-owned."
+  Assert-True ($staleRecovery.ProcessId -ne $staleRecoveryProcess.Id) "Stale recovery should not reuse the unrelated recorded PID."
+  Assert-True ($null -ne (Get-Process -Id $staleRecoveryProcess.Id -ErrorAction SilentlyContinue)) "Stale recovery must not terminate the unrelated recorded process."
+  $staleRecoveryStop = Stop-CodexPlusTaskboard -StateRoot $staleRecoveryStateRoot
+  Assert-Match $staleRecoveryStop.Reason "*was stopped*" "Recovered taskboard should stop cleanly after stale metadata recovery."
+  Stop-TestOwnedProcess -Process $staleRecoveryProcess -ExecutablePath ((Get-Command powershell -ErrorAction Stop | Select-Object -First 1).Source) -Entrypoint "Start-Sleep" -OwnerToken $staleRecoveryProcessToken
+  $staleRecoveryProcess = $null
+
   $wrongProcessToken = "wrong-process-" + [guid]::NewGuid().ToString("N")
   $wrongProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile", "-Command", ("Start-Sleep -Seconds 60; Write-Output '{0}'" -f $wrongProcessToken)) -WindowStyle Hidden -PassThru
   Set-Content -LiteralPath (Join-Path $stateRoot "pid.txt") -Value ([string]$wrongProcess.Id) -Encoding ASCII
@@ -424,6 +449,10 @@ process.on("SIGTERM", shutdown);
 
   if ($wrongProcess -and -not $wrongProcess.HasExited) {
     Stop-TestOwnedProcess -Process $wrongProcess -ExecutablePath ((Get-Command powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source) -Entrypoint "Start-Sleep" -OwnerToken $wrongProcessToken
+  }
+
+  if ($staleRecoveryProcess -and -not $staleRecoveryProcess.HasExited) {
+    Stop-TestOwnedProcess -Process $staleRecoveryProcess -ExecutablePath ((Get-Command powershell -ErrorAction SilentlyContinue | Select-Object -First 1).Source) -Entrypoint "Start-Sleep" -OwnerToken $staleRecoveryProcessToken
   }
 
   if ($fakeNodeProcess -and -not $fakeNodeProcess.HasExited) {

@@ -8,10 +8,10 @@ $RepoRoot = Split-Path -Parent $ScriptRoot
 $SourceDir = Join-Path $ScriptRoot "source"
 $TaskboardSource = Join-Path $ScriptRoot "taskbord"
 $VersionFile = Join-Path $SourceDir "VERSION"
-$Version = "1.8.5"
+$Version = "1.8.6"
 if (Test-Path $VersionFile) {
   $Version = (Get-Content -Path $VersionFile -Raw -ErrorAction SilentlyContinue).Trim()
-  if (-not $Version) { $Version = "1.8.5" }
+  if (-not $Version) { $Version = "1.8.6" }
 }
 
 $DistRoot = Join-Path $RepoRoot "dist"
