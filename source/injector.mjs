@@ -3148,6 +3148,8 @@ function buildInjectionSource(css) {
     const HEADER_ATTRIBUTE = "data-codex-pokedex-header";
     const COMPOSER_ATTRIBUTE = "data-codex-pokedex-composer";
     const TASK_RUNNING_ATTRIBUTE = "data-codex-pokedex-task-running";
+    const TASK_STATUS_ATTRIBUTE = "data-codex-plus-task-status";
+    const TASK_STATUS_STATE_ATTRIBUTE = "data-codex-plus-task-status-state";
     const FLAT_PICKER_ATTRIBUTE = "data-codex-pokedex-flat-picker";
     const FLAT_PICKER_SURFACE_ATTRIBUTE = "data-codex-pokedex-flat-picker-surface";
     const FLAT_PICKER_FALLBACK_ATTRIBUTE = "data-codex-pokedex-flat-picker-fallback";
@@ -3206,6 +3208,10 @@ function buildInjectionSource(css) {
       element.style.removeProperty("border-width");
       element.style.removeProperty("border-style");
       element.style.removeProperty("border-color");
+    }
+    for (const element of document.querySelectorAll("[" + TASK_STATUS_ATTRIBUTE + "]")) {
+      element.removeAttribute(TASK_STATUS_ATTRIBUTE);
+      element.removeAttribute(TASK_STATUS_STATE_ATTRIBUTE);
     }
     const SETTINGS_ICON = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>';
     const DEFAULT_MODEL_OPTIONS = ["5.6 Sol", "5.6 Terra", "5.6 Luna", "5.5", "5.3 Codex Spark"];
@@ -5479,19 +5485,27 @@ function buildInjectionSource(css) {
       }
     };
 
-    const isComposerPrimaryActionButton = (button) => {
-      if (!(button instanceof HTMLButtonElement)) return false;
-      const label = (
+    const getComposerActionLabel = (button) => {
+      if (!(button instanceof HTMLButtonElement)) return "";
+      return (
         button.getAttribute("aria-label") ||
         button.getAttribute("title") ||
         button.textContent ||
         ""
       ).toLowerCase();
+    };
+
+    const isComposerStopButton = (button) => {
+      const label = getComposerActionLabel(button);
+      return label.includes("stop") || label.includes("停止");
+    };
+
+    const isComposerPrimaryActionButton = (button) => {
+      const label = getComposerActionLabel(button);
       return (
-        label.includes("stop") ||
+        isComposerStopButton(button) ||
         label.includes("send") ||
         label.includes("submit") ||
-        label.includes("停止") ||
         label.includes("发送") ||
         label.includes("提交")
       );
@@ -5519,6 +5533,36 @@ function buildInjectionSource(css) {
 
     const styleComposerActionLikeVoice = (actionButton, voiceButton) => {
       if (!(actionButton instanceof HTMLElement)) return;
+      const isStopAction = isComposerStopButton(actionButton);
+
+      // Stop is a task-state control, not a second primary voice CTA. Clear
+      // the previous inline voice clone so the themed secondary rule can own it.
+      if (isStopAction) {
+        for (const key of [
+          "background",
+          "background-color",
+          "background-image",
+          "border",
+          "border-color",
+          "border-width",
+          "border-style",
+          "border-radius",
+          "box-shadow",
+          "color",
+          "opacity",
+          "outline",
+          "filter",
+          "animation",
+        ]) actionButton.style.removeProperty(key);
+        for (const svg of actionButton.querySelectorAll("svg, path, rect, circle, line, polyline, polygon")) {
+          svg.style.removeProperty("color");
+          svg.style.removeProperty("stroke");
+          svg.style.removeProperty("fill");
+          svg.style.removeProperty("opacity");
+        }
+        actionButton.setAttribute("data-codex-plus-composer-action-styled", "semantic-stop");
+        return;
+      }
       const rootStyle = getComputedStyle(document.documentElement);
       const accent = rootStyle.getPropertyValue("--codex-plus-accent").trim() || "#b61f31";
       const accentDark = rootStyle.getPropertyValue("--codex-plus-accent-dark").trim() || "#751522";
@@ -6099,9 +6143,11 @@ function buildInjectionSource(css) {
       }
     };
 
-    const publishTaskState = () => {
+    const readTaskRunningState = () => Array.from(document.querySelectorAll("button"))
+      .some((button) => isComposerStopButton(button));
+
+    const publishTaskState = (running = readTaskRunningState()) => {
       if (isAvatarOverlay) return;
-      const running = document.querySelector('button[aria-label="Stop"]') != null;
       document.documentElement.setAttribute(TASK_RUNNING_ATTRIBUTE, running ? "on" : "off");
       postChannelMessage(activityChannel, { type: "task-state", running });
     };
@@ -6213,6 +6259,86 @@ function buildInjectionSource(css) {
       return surface;
     };
 
+    const clearTaskStatusDecorations = () => {
+      for (const current of document.querySelectorAll("[" + TASK_STATUS_ATTRIBUTE + "]")) {
+        current.removeAttribute(TASK_STATUS_ATTRIBUTE);
+        current.removeAttribute(TASK_STATUS_STATE_ATTRIBUTE);
+      }
+    };
+
+    const decorateTaskStatus = (taskRunning = readTaskRunningState()) => {
+      clearTaskStatusDecorations();
+      if (isAvatarOverlay || isHotkeyWindow || !featureSettings.theme) return;
+
+      const composer = Array.from(document.querySelectorAll(
+        "[" + COMPOSER_ATTRIBUTE + '=\"on\"], .composer-surface-chrome',
+      )).find((element) => {
+        if (!(element instanceof HTMLElement)) return false;
+        if (element.closest('[data-codex-pokedex-avatar-overlay="on"]')) return false;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number.parseFloat(style.opacity || "1") > 0 &&
+          rect.width >= 180 &&
+          rect.height >= 40 &&
+          rect.bottom > 0 &&
+          rect.top < window.innerHeight
+        );
+      });
+      if (!composer) return;
+
+      const composerRect = composer.getBoundingClientRect();
+      const visibleStatus = Array.from(document.querySelectorAll('[role="status"]'))
+        .filter((element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          if (element.closest("[" + COMPOSER_ATTRIBUTE + '=\"on\"]')) return false;
+          if (element.classList.contains("sr-only")) return false;
+          if (element.id.toLowerCase().includes("liveregion")) return false;
+          if (element.closest('[aria-hidden="true"]')) return false;
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          const horizontalOverlap = Math.max(
+            0,
+            Math.min(rect.right, composerRect.right) - Math.max(rect.left, composerRect.left),
+          );
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            Number.parseFloat(style.opacity || "1") > 0 &&
+            rect.width >= 180 &&
+            rect.height >= 8 &&
+            rect.bottom > 0 &&
+            rect.top < window.innerHeight &&
+            rect.bottom <= composerRect.top + 16 &&
+            horizontalOverlap >= Math.min(180, composerRect.width * 0.45)
+          );
+        })
+        .map((element) => ({
+          element,
+          distance: Math.max(0, composerRect.top - element.getBoundingClientRect().bottom),
+        }))
+        .sort((left, right) => left.distance - right.distance);
+      const candidate = visibleStatus[0]?.element;
+      if (!candidate) return;
+
+      const text = (candidate.textContent || "").replace(/\s+/g, " ").trim();
+      const normalizedText = text.toLowerCase();
+      let state = "info";
+      if (taskRunning) {
+        state = "running";
+      } else if (/失败|错误|异常|failed|failure|error|exception/.test(normalizedText)) {
+        state = "error";
+      } else if (/完成|成功|已处理|complete|completed|successful|success|done|finished/.test(normalizedText)) {
+        state = "complete";
+      } else if (/正在|启动|等待|设置|准备|处理中|运行|starting|waiting|setting up|preparing|processing|running|queued|in progress|working/.test(normalizedText)) {
+        state = "pending";
+      }
+      candidate.setAttribute(TASK_STATUS_ATTRIBUTE, "on");
+      candidate.setAttribute(TASK_STATUS_STATE_ATTRIBUTE, state);
+    };
+
     const applyFeatureSettings = (nextSettings, options = {}) => {
       const { persist = true, broadcast = true, notify = true } = options;
       // Scope B2: all shipped features are user-toggleable.
@@ -6312,11 +6438,13 @@ function buildInjectionSource(css) {
           document.querySelector("[" + HOME_PANEL_ATTRIBUTE + "]")?.removeAttribute(HOME_PANEL_ATTRIBUTE);
         }
         if (featureSettings.theme) decorateComposerPrimaryActions();
+        const taskRunning = readTaskRunningState();
+        decorateTaskStatus(taskRunning);
         if (featureSettings.modelPicker) decorateFlatPicker();
         else removeFlatPicker();
+        publishTaskState(taskRunning);
       }
       updateSettingsPanel();
-      publishTaskState();
       window.__codexPlusProFeatureSettings = { ...featureSettings };
       window.__codexPlusProApplySettings = (value) => applyFeatureSettings(value, {
         persist: true,
@@ -6353,9 +6481,11 @@ function buildInjectionSource(css) {
         decorateSettingsButton();
         if (featureSettings.theme) decorateHome();
         if (featureSettings.theme) decorateComposerPrimaryActions();
+        const taskRunning = readTaskRunningState();
+        decorateTaskStatus(taskRunning);
         if (featureSettings.modelPicker) decorateFlatPicker();
+        publishTaskState(taskRunning);
       }
-      publishTaskState();
     };
 
     const scheduleRefresh = () => {
@@ -6410,6 +6540,7 @@ function buildInjectionSource(css) {
         element.style.removeProperty("border-style");
         element.style.removeProperty("border-color");
       }
+      clearTaskStatusDecorations();
       if (window.__codexPokedexActivityChannel === activityChannel) window.__codexPokedexActivityChannel = null;
       if (window.__codexPlusProSettingsChannel === settingsChannel) window.__codexPlusProSettingsChannel = null;
       if (window.__codexPlusProRuntimeCleanup === cleanupRuntime) delete window.__codexPlusProRuntimeCleanup;

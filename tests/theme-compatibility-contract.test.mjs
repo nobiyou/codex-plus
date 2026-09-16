@@ -29,6 +29,39 @@ test("theme maps native semantic tokens onto the existing themed palette", async
   assert.match(styles, /--color-icon-primary:\s*var\(--color-token-foreground\)/);
 });
 
+test("composer utility bar follows themed surface tokens in light and dark modes", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const lightUtilityBlock = styles.slice(
+    styles.indexOf("/* The dark strip behind project/branch chips reuses sidebar tokens; retint it. */"),
+    styles.indexOf("/* Chips: project / local / branch */"),
+  );
+  const darkUtilityBlock = styles.slice(
+    styles.indexOf("/* Dark: composer utility bar (project / local / branch task strip)"),
+    styles.indexOf(":root[data-codex-pokedex-theme=\"on\"].electron-dark [data-composer-utility-bar-scroll-area] button"),
+  );
+
+  assert.match(lightUtilityBlock, /var\(--color-token-input-background/);
+  assert.match(lightUtilityBlock, /var\(--color-token-main-surface-primary/);
+  assert.match(lightUtilityBlock, /\[data-composer-utility-bar-scroll-area\]/);
+  assert.doesNotMatch(lightUtilityBlock, /rgb\(255 255 255 \/ 0\.72\)/);
+  assert.match(darkUtilityBlock, /var\(--color-token-input-background/);
+  assert.match(darkUtilityBlock, /var\(--color-token-main-surface-primary/);
+  assert.match(darkUtilityBlock, /\[data-composer-utility-bar-scroll-area\]/);
+  assert.doesNotMatch(darkUtilityBlock, /rgb\(28 26 32 \/ 0\.94\)/);
+});
+
+test("model picker base surfaces reuse the active theme palette", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const segmentBlock = styles.slice(
+    styles.indexOf(":root[data-codex-plus-model-picker=\"on\"] .codex-pokedex-flat-picker-segments"),
+    styles.indexOf(":root[data-codex-plus-model-picker=\"on\"] .codex-pokedex-flat-picker-option"),
+  );
+
+  assert.match(segmentBlock, /var\(--codex-plus-accent/);
+  assert.match(segmentBlock, /var\(--color-token-main-surface-primary/);
+  assert.doesNotMatch(segmentBlock, /rgb\(96 62 49 \/ 0\.055\)/);
+});
+
 test("theme gives native tooltip variants an accent-aware surface", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
 
@@ -180,6 +213,43 @@ test("theme gives light action buttons a pale accent surface", async () => {
   assert.match(styles, /\[class\*="rounded-full"\]\[class\*="border"\]:not\(\.composer-surface-chrome \*\):not\(\[class\*="Composer"\] \*\)/);
 });
 
+test("theme scopes the task status strip and gives it a readable semantic treatment", async () => {
+  const [injector, styles] = await Promise.all([
+    fs.readFile(injectorSourcePath, "utf8"),
+    fs.readFile(themeStylesPath, "utf8"),
+  ]);
+
+  assert.match(injector, /const TASK_STATUS_ATTRIBUTE = "data-codex-plus-task-status"/);
+  assert.match(injector, /document\.querySelectorAll\('\[role="status"\]'\)/);
+  assert.match(injector, /element\.classList\.contains\("sr-only"\)/);
+  assert.match(injector, /rect\.bottom <= composerRect\.top \+ 16/);
+  assert.match(injector, /candidate\.setAttribute\(TASK_STATUS_ATTRIBUTE, "on"\)/);
+  assert.match(styles, /\[data-codex-plus-task-status="on"\]/);
+  assert.match(styles, /min-height:\s*32px\s*!important/);
+  assert.match(styles, /border-inline-start:\s*3px solid var\(--codex-plus-task-status-color\)/);
+  assert.match(styles, /codex-plus-task-status-pulse/);
+  assert.match(styles, /prefers-reduced-motion: reduce\)[\s\S]*data-codex-plus-task-status/);
+  assert.doesNotMatch(
+    styles,
+    /\.thread-scroll-container \[role="status"\]:not\(\[id\*="LiveRegion"\]\)/,
+  );
+});
+
+test("task status classification uses the live stop control and bilingual status text", async () => {
+  const source = await fs.readFile(injectorSourcePath, "utf8");
+
+  assert.match(source, /const getComposerActionLabel = \(button\) =>/);
+  assert.match(source, /const isComposerStopButton = \(button\) =>/);
+  assert.match(source, /label\.includes\("stop"\) \|\| label\.includes\("停止"\)/);
+  assert.match(source, /const readTaskRunningState = \(\) => Array\.from\(document\.querySelectorAll\("button"\)\)/);
+  assert.match(source, /const publishTaskState = \(running = readTaskRunningState\(\)\)/);
+  assert.match(source, /const decorateTaskStatus = \(taskRunning = readTaskRunningState\(\)\)/);
+  assert.match(source, /failed\|failure\|error\|exception/);
+  assert.match(source, /complete\|completed\|successful\|success\|done\|finished/);
+  assert.match(source, /starting\|waiting\|setting up\|preparing\|processing\|running\|queued\|in progress\|working/);
+  assert.match(source, /decorateTaskStatus\(taskRunning\);[\s\S]*publishTaskState\(taskRunning\);/);
+});
+
 test("compatibility settings keep a polished five-segment desktop control", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
   const polishBlock = styles.slice(styles.lastIndexOf("/* Settings polish:"));
@@ -197,6 +267,11 @@ test("theme gives filled buttons readable foregrounds and quiet disabled states"
   const buttonBlock = styles.slice(styles.lastIndexOf("/* Button contrast polish:"));
 
   assert.match(buttonBlock, /--codex-plus-action-bg:/);
+  assert.match(buttonBlock, /:root\[data-codex-pokedex-theme="on"\]:not\(\.electron-dark\)/);
+  assert.match(buttonBlock, /--codex-plus-action-bg:\s*color-mix\([\s\S]*62%/);
+  assert.match(buttonBlock, /--color-token-button-background:\s*var\(--codex-plus-action-bg\) !important/);
+  assert.match(buttonBlock, /--color-token-button-foreground:\s*var\(--codex-plus-action-fg\) !important/);
+  assert.match(buttonBlock, /--codex-plus-action-gradient-start:\s*var\(--codex-plus-action-bg\)/);
   assert.match(buttonBlock, /\.codex-plus-pro-compatibility-repair:not\(:disabled\)/);
   assert.match(buttonBlock, /\.codex-plus-pro-compatibility-repair:disabled[\s\S]*background-image: none !important/);
   assert.match(buttonBlock, /aside:has\(img\[src\*="bidi-homepage-banner-orb"\]\) button:not\(:has\(svg\)\)/);
@@ -206,4 +281,18 @@ test("theme gives filled buttons readable foregrounds and quiet disabled states"
   assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*-webkit-text-fill-color: var\(--codex-plus-action-fg\)/);
   assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*background-image: linear-gradient/);
   assert.match(buttonBlock, /\.codex-pokedex-flat-picker-switch-thumb[\s\S]*background: #ffffff !important/);
+});
+
+test("empty composer stop action uses a quiet themed task-state surface", async () => {
+  const [injector, styles] = await Promise.all([
+    fs.readFile(injectorSourcePath, "utf8"),
+    fs.readFile(themeStylesPath, "utf8"),
+  ]);
+
+  assert.match(injector, /const isStopAction = isComposerStopButton\(actionButton\)/);
+  assert.match(injector, /semantic-stop/);
+  assert.match(styles, /button:is\([\s\S]*\[aria-label="Stop"\][\s\S]*semantic-stop/);
+  assert.match(styles, /background-image: none !important/);
+  assert.match(styles, /var\(--color-token-main-surface-primary/);
+  assert.match(styles, /:focus-visible[\s\S]*outline: 2px solid color-mix/);
 });

@@ -42,7 +42,7 @@ test("model picker uses a version-tolerant composer surface contract", async () 
   assert.match(flatPickerLayoutRule, /margin:\s*8px 0 0 !important/);
   assert.match(themeStyles, /width:\s*auto !important/);
   assert.match(themeStyles, /gap:\s*6px 10px;/);
-  assert.match(themeStyles, /padding:\s*0 8px;/);
+  assert.match(themeStyles, /padding:\s*2px 8px;/);
   assert.match(themeStyles, /gap:\s*2px;/);
   assert.match(themeStyles, /padding:\s*2px;/);
   assert.match(themeStyles, /border:\s*1px solid/);
@@ -53,4 +53,38 @@ test("model picker uses a version-tolerant composer surface contract", async () 
   assert.match(hoverRule, /color:\s*var\(--codex-plus-accent-dark/);
   assert.match(hoverRule, /border-color:\s*color-mix\(in srgb, var\(--codex-plus-accent/);
   assert.match(hoverRule, /background:\s*color-mix\(in srgb, var\(--codex-plus-accent/);
+});
+
+test("model picker density modes keep stable targets and responsive overflow", async () => {
+  const themeStyles = await fs.readFile(themeStylesPath, "utf8");
+
+  const comfortableBlock = themeStyles.match(
+    /:root\[data-codex-plus-model-picker="on"\]\[data-codex-plus-model-density="comfortable"\]\s+\.codex-pokedex-flat-picker\s*\{[^}]+\}/,
+  )?.[0] || "";
+  assert.match(comfortableBlock, /min-height:\s*48px/);
+  assert.match(comfortableBlock, /padding:\s*7px 10px 9px/);
+  assert.match(comfortableBlock, /border-radius:\s*10px/);
+
+  const comfortableOptionBlock = themeStyles.match(
+    /:root\[data-codex-plus-model-picker="on"\]\[data-codex-plus-model-density="comfortable"\][\s\S]*?\.codex-pokedex-flat-picker-option\s*\{[^}]+\}/,
+  )?.[0] || "";
+  assert.match(comfortableOptionBlock, /height:\s*30px/);
+  assert.match(comfortableOptionBlock, /min-width:\s*36px/);
+  assert.match(comfortableOptionBlock, /padding-right:\s*10px/);
+
+  assert.match(
+    themeStyles,
+    /@media \(max-width: 700px\)[\s\S]*?\.codex-pokedex-flat-picker\s*\{[\s\S]*?flex-wrap:\s*nowrap[\s\S]*?overflow-x:\s*auto[\s\S]*?scrollbar-width:\s*thin/,
+  );
+});
+
+test("compact model picker keeps a top separator without bottom spacing", async () => {
+  const themeStyles = await fs.readFile(themeStylesPath, "utf8");
+  const compactBlock = themeStyles.match(
+    /:root\[data-codex-plus-model-picker="on"\]\[data-codex-plus-model-density="compact"\]\s+\.codex-pokedex-flat-picker\s*\{[^}]+\}/,
+  )?.[0] || "";
+
+  assert.match(compactBlock, /border-top:\s*1px solid color-mix/);
+  assert.match(compactBlock, /padding-bottom:\s*2px/);
+  assert.match(compactBlock, /margin-bottom:\s*0 !important/);
 });
