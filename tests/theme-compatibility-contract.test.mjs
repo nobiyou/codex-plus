@@ -72,6 +72,23 @@ test("theme gives native tooltip variants an accent-aware surface", async () => 
   assert.match(styles, /backdrop-filter:\s*blur\(14px\)/);
 });
 
+test("light action tooltips use a quiet glass gradient", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const actionTooltipBlock = styles.slice(
+    styles.indexOf("/* Light action hints should read as part of the blue glass shell"),
+    styles.indexOf("/* Task sequence hover card"),
+  );
+
+  assert.match(actionTooltipBlock, /:not\(\.electron-dark\)/);
+  assert.match(actionTooltipBlock, /\[role="tooltip"\]\[data-side="top"\]/);
+  assert.match(actionTooltipBlock, /background:\s*\n\s*linear-gradient\(/);
+  assert.match(actionTooltipBlock, /--codex-plus-accent[\s\S]*10%/);
+  assert.match(actionTooltipBlock, /--codex-plus-highlight[\s\S]*7%/);
+  assert.match(actionTooltipBlock, /color:\s*var\(--codex-plus-accent-dark/);
+  assert.doesNotMatch(actionTooltipBlock, /--codex-plus-accent[^\n]*92%/);
+  assert.doesNotMatch(actionTooltipBlock, /--codex-plus-accent-dark[^\n]*88%/);
+});
+
 test("theme gives the task sequence hover card a compact theme-aware surface", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
 
@@ -124,6 +141,17 @@ test("theme rounds native diff previews while preserving their scroll and diff r
     styles.indexOf("/* Native diff review surface"),
     styles.indexOf("/* Native changed-file summary"),
   );
+  const ruleBlock = (selectorFragment) => {
+    const selectorIndex = styles.indexOf(selectorFragment);
+    assert.notEqual(selectorIndex, -1, `missing selector: ${selectorFragment}`);
+    const ruleStart = styles.lastIndexOf(':root[data-codex-pokedex-theme="on"]', selectorIndex);
+    const ruleEnd = styles.indexOf("}", selectorIndex) + 1;
+    return styles.slice(ruleStart, ruleEnd);
+  };
+  const reviewHostBlock = ruleBlock("#review-diffs-open");
+  const anonymousReviewHostBlock = ruleBlock(
+    'div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"]):not(#review-diffs-open)',
+  );
   const diffScrollHostBlock = styles.slice(
     styles.indexOf("  :is(diffs-container, [class*=\"diffs-container\"]),"),
     styles.indexOf("/* The file list is a single rounded stack"),
@@ -152,13 +180,12 @@ test("theme rounds native diff previews while preserving their scroll and diff r
     diffSurfaceBlock,
     /div\[class\*=\"electron:bg-surface\"\]:has\(\[class\*=\"group\/file-diff\"\]\)[\s\S]*background-color:\s*transparent\s*!important/,
   );
-  assert.doesNotMatch(diffSurfaceBlock, /:not\(#review-diffs-open\)/);
   assert.match(styles, /#review-diffs-open\s*\{[\s\S]*flex:\s*1 1 0%\s*!important/);
-  assert.match(styles, /#review-diffs-open\s*\{[\s\S]*height:\s*auto\s*!important/);
+  assert.match(styles, /#review-diffs-open\s*\{[\s\S]*height:\s*100%\s*!important/);
   assert.match(styles, /#review-diffs-open\s*\{[\s\S]*background-color:\s*transparent\s*!important/);
   assert.match(styles, /#review-diffs-open\s*\{[\s\S]*background-image:\s*none\s*!important/);
-  assert.match(styles, /#review-diffs-open\s*\{[\s\S]*align-self:\s*flex-start\s*!important/);
-  assert.match(styles, /#review-diffs-open\s*\{[\s\S]*max-height:\s*100%\s*!important/);
+  assert.match(styles, /#review-diffs-open\s*\{[\s\S]*align-self:\s*auto\s*!important/);
+  assert.match(styles, /#review-diffs-open\s*\{[\s\S]*max-height:\s*none\s*!important/);
   assert.match(diffSurfaceBlock, />\s*\[role="presentation"\]/);
   assert.match(diffSurfaceBlock, />\s*\[class\*="overflow-hidden"\]/);
   assert.match(diffSurfaceBlock, /border-top-left-radius:\s*11px\s*!important/);
@@ -169,12 +196,73 @@ test("theme rounds native diff previews while preserving their scroll and diff r
   assert.match(styles, /var\(--codex-plus-accent/);
   assert.match(
     diffSurfaceBlock,
-    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\)/,
+    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\):not\(#review-diffs-open\):not\(\[role="tooltip"\]\s+\*\)/,
   );
   assert.match(
     diffSurfaceBlock,
-    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\)[\s\S]*\[class\*="overflow-clip"\]/,
+    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\):not\(#review-diffs-open\):not\(\[role="tooltip"\]\s+\*\)[\s\S]*\[class\*="overflow-clip"\]/,
   );
+  assert.match(diffSurfaceBlock, /#review-diffs-open\s*\{[\s\S]*height:\s*100%\s*!important/);
+  assert.match(diffSurfaceBlock, /#review-diffs-open\s*\{[\s\S]*border:\s*0\s*!important/);
+  assert.match(
+    diffSurfaceBlock,
+    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\):not\(#review-diffs-open\)[\s\S]*height:\s*100%\s*!important/,
+  );
+  assert.match(
+    diffSurfaceBlock,
+    /div\[class\*="h-full"\]\[class\*="flex-col"\]:has\(\[class\*="group\/file-diff"\]\):not\(#review-diffs-open\)[\s\S]*border:\s*0\s*!important/,
+  );
+  assert.doesNotMatch(reviewHostBlock, /height:\s*auto\s*!important/);
+  assert.doesNotMatch(anonymousReviewHostBlock, /height:\s*auto\s*!important/);
+});
+
+test("expanded diff layout excludes portal hover previews", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const diffSurfaceBlock = styles.slice(
+    styles.indexOf("/* Native diff review surface"),
+    styles.indexOf("/* Settings themed background"),
+  );
+
+  assert.match(diffSurfaceBlock, /:not\(\[role="tooltip"\]\s+\*\)/);
+  assert.match(
+    diffSurfaceBlock,
+    /data-codex-plus-compat-diff-preview="fallback"\][\s\S]*:not\(\[role="tooltip"\]\s+\*\)/,
+  );
+});
+
+test("theme keeps the hover diff preview on native geometry", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const hoverPreviewBlock = styles.slice(
+    styles.indexOf("/* Native hover diff preview"),
+    styles.indexOf("/* Native diff review surface"),
+  );
+
+  assert.match(hoverPreviewBlock, /\[role="tooltip"\]\[class\*="diff-preview"\]/);
+  assert.match(hoverPreviewBlock, /border:\s*0\s*!important/);
+  assert.match(hoverPreviewBlock, /box-shadow:\s*none\s*!important/);
+  assert.match(hoverPreviewBlock, /-webkit-backdrop-filter:\s*none\s*!important/);
+  assert.match(hoverPreviewBlock, /backdrop-filter:\s*none\s*!important/);
+  assert.match(hoverPreviewBlock, /\[data-testid="diff-preview-scroll"\]/);
+  assert.match(hoverPreviewBlock, /max-height:\s*384px\s*!important/);
+  assert.match(hoverPreviewBlock, /overflow:\s*auto\s*!important/);
+  const topGeometryStart = hoverPreviewBlock.indexOf(
+    '[role="tooltip"][data-side="top"][class*="diff-preview"]',
+  );
+  assert.notEqual(topGeometryStart, -1);
+  const topGeometryEnd = hoverPreviewBlock.indexOf("}", topGeometryStart) + 1;
+  const topGeometryBlock = hoverPreviewBlock.slice(topGeometryStart, topGeometryEnd);
+  assert.match(topGeometryBlock, /height:\s*auto\s*!important/);
+  assert.match(topGeometryBlock, /min-height:\s*0\s*!important/);
+  const baseGeometryStart = hoverPreviewBlock.indexOf(
+    '[role="tooltip"][class*="diff-preview"]',
+  );
+  const baseGeometryEnd = hoverPreviewBlock.indexOf("}", baseGeometryStart) + 1;
+  const baseGeometryBlock = hoverPreviewBlock.slice(baseGeometryStart, baseGeometryEnd);
+  assert.doesNotMatch(
+    baseGeometryBlock,
+    /height:\s*auto\s*!important/,
+  );
+  assert.doesNotMatch(hoverPreviewBlock, /max-height:\s*none\s*!important/);
 });
 
 test("theme gives the changed-file summary a calm accent-aware surface", async () => {
@@ -250,16 +338,48 @@ test("task status classification uses the live stop control and bilingual status
   assert.match(source, /decorateTaskStatus\(taskRunning\);[\s\S]*publishTaskState\(taskRunning\);/);
 });
 
-test("compatibility settings keep a polished five-segment desktop control", async () => {
+test("compatibility settings keep the original segmented control geometry", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
-  const polishBlock = styles.slice(styles.lastIndexOf("/* Settings polish:"));
+  const polishBlock = styles.slice(styles.lastIndexOf("/* Settings original parity:"));
 
-  assert.match(polishBlock, /\.codex-plus-pro-compatibility-categories[\s\S]*grid-auto-flow:\s*column/);
-  assert.match(polishBlock, /grid-auto-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-categories[\s\S]*grid-auto-flow:\s*row/);
+  assert.match(polishBlock, /grid-auto-columns:\s*auto/);
   assert.match(polishBlock, /grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/);
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-categories[\s\S]*padding:\s*2px/);
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-category\s*\{[\s\S]*min-height:\s*32px/);
+  assert.match(
+    styles,
+    /\.codex-plus-pro-compatibility-category:hover:not\(:disabled\):not\(\[data-selected="true"\]\)/,
+  );
   assert.match(polishBlock, /\.codex-plus-pro-compatibility-category\[data-selected="true"\]/);
-  assert.match(polishBlock, /\.codex-plus-pro-compatibility-status::before/);
-  assert.match(polishBlock, /@media \(max-width: 700px\)[\s\S]*scroll-snap-type:\s*inline mandatory/);
+  assert.doesNotMatch(
+    styles,
+    /\.codex-plus-pro-compatibility-category\[data-selected="true"\]\s*:\s*hover/,
+  );
+  assert.match(polishBlock, /data-selected="true"\][\s\S]*var\(--codex-plus-accent, #b61f31\)/);
+  assert.match(polishBlock, /\.codex-plus-pro-compatibility-status::before\s*\{[\s\S]*display:\s*none\s*!important/);
+  assert.match(polishBlock, /@media \(max-width: 700px\)[\s\S]*min-width:\s*92px/);
+});
+
+test("accent-specific settings rules leave compatibility tabs to their dedicated polish", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+
+  assert.match(
+    styles,
+    /data-codex-plus-accent="aria"\][\s\S]*\.codex-plus-pro-settings-choice:hover:not\(:disabled\):not\(\.codex-plus-pro-compatibility-category\)/,
+  );
+  assert.match(
+    styles,
+    /data-codex-plus-accent="aria"\][\s\S]*\.codex-plus-pro-settings-choice\[data-selected="true"\]:not\(\.codex-plus-pro-compatibility-category\)/,
+  );
+  assert.match(
+    styles,
+    /data-codex-plus-accent="adaptive"\][\s\S]*\.codex-plus-pro-settings-choice:hover:not\(:disabled\):not\(\.codex-plus-pro-compatibility-category\)/,
+  );
+  assert.match(
+    styles,
+    /data-codex-plus-accent="adaptive"\][\s\S]*\.codex-plus-pro-settings-choice\[data-selected="true"\]:not\(\.codex-plus-pro-compatibility-category\)/,
+  );
 });
 
 test("theme gives filled buttons readable foregrounds and quiet disabled states", async () => {
@@ -283,6 +403,26 @@ test("theme gives filled buttons readable foregrounds and quiet disabled states"
   assert.match(buttonBlock, /\.codex-pokedex-flat-picker-switch-thumb[\s\S]*background: #ffffff !important/);
 });
 
+test("light blue actions separate label and icon contrast", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const buttonBlock = styles.slice(styles.lastIndexOf("/* Button contrast polish:"));
+
+  assert.match(buttonBlock, /--codex-plus-action-bg:\s*color-mix\([\s\S]*54%/);
+  assert.match(buttonBlock, /--codex-plus-action-bg-hover:\s*color-mix\([\s\S]*60%/);
+  assert.match(
+    buttonBlock,
+    /--codex-plus-action-fg:\s*color-mix\([\s\S]*--codex-plus-accent-dark[\s\S]*22%[\s\S]*--color-token-text-primary/,
+  );
+  assert.match(
+    buttonBlock,
+    /--codex-plus-action-icon:\s*color-mix\([\s\S]*--codex-plus-accent-dark[\s\S]*42%[\s\S]*--color-token-text-primary/,
+  );
+  assert.match(
+    buttonBlock,
+    /button:is\([\s\S]*\):not\(:disabled\)\s+svg,\s*\n:root\[data-codex-pokedex-theme="on"\][\s\S]*\)\s*:\s*not\(:disabled\)\s+svg \*\s*\{[\s\S]*color:\s*var\(--codex-plus-action-icon\)/,
+  );
+});
+
 test("empty composer stop action uses a quiet themed task-state surface", async () => {
   const [injector, styles] = await Promise.all([
     fs.readFile(injectorSourcePath, "utf8"),
@@ -295,4 +435,89 @@ test("empty composer stop action uses a quiet themed task-state surface", async 
   assert.match(styles, /background-image: none !important/);
   assert.match(styles, /var\(--color-token-main-surface-primary/);
   assert.match(styles, /:focus-visible[\s\S]*outline: 2px solid color-mix/);
+});
+
+test("settings surface preserves the original styling while the theme is enabled", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const settingsBlock = styles.slice(styles.lastIndexOf("/* Settings original parity:"));
+
+  assert.match(settingsBlock, /\.codex-plus-pro-settings-popover[\s\S]*background:\s*var\(--token-main-surface-primary/);
+  assert.match(settingsBlock, /background-image:\s*none\s*!important/);
+  assert.match(settingsBlock, /-webkit-backdrop-filter:\s*none\s*!important/);
+  assert.match(settingsBlock, /\.codex-plus-pro-settings-navigation-item\s*\{[\s\S]*min-height:\s*40px[\s\S]*border-radius:\s*6px/);
+  assert.match(
+    settingsBlock,
+    /\.codex-plus-pro-settings-choices\s*\{[\s\S]*padding:\s*2px[\s\S]*border-radius:\s*6px[\s\S]*gap:\s*2px/,
+  );
+  assert.match(settingsBlock, /\.codex-plus-pro-settings-choice:not\([^\{]*\{[\s\S]*min-height:\s*32px[\s\S]*border-radius:\s*4px/);
+  assert.match(settingsBlock, /data-selected="true"\][\s\S]*var\(--token-button-foreground[\s\S]*background:\s*var\(--codex-plus-accent/);
+  assert.match(settingsBlock, /\.codex-plus-pro-settings-color-choice\[data-selected="true"\][\s\S]*rgb\(255 255 255 \/ 0\.72\)/);
+  assert.match(settingsBlock, /\.codex-plus-pro-settings-wallpaper-preview[\s\S]*width:\s*132px[\s\S]*border-radius:\s*6px/);
+  assert.match(settingsBlock, /\.codex-plus-pro-settings-logo-preview[\s\S]*width:\s*72px[\s\S]*height:\s*72px/);
+  assert.match(settingsBlock, /codex-plus-pro-settings-upload/);
+});
+
+test("settings background follows the active theme without changing native control geometry", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const backgroundBlock = styles.slice(styles.lastIndexOf("/* Settings themed background:"));
+
+  assert.match(
+    backgroundBlock,
+    /\.codex-plus-pro-settings-popover[\s\S]*background-color:\s*var\(\s*--color-token-main-surface-primary/,
+  );
+  assert.match(backgroundBlock, /--codex-plus-accent[\s\S]*--codex-plus-highlight/);
+  assert.match(backgroundBlock, /--codex-plus-accent-dark/);
+  assert.match(backgroundBlock, /var\(--codex-pokedex-wallpaper\)/);
+  assert.match(backgroundBlock, /\.codex-plus-pro-settings-header[\s\S]*background:/);
+  assert.match(backgroundBlock, /\.codex-plus-pro-settings-navigation[\s\S]*background:/);
+  assert.match(backgroundBlock, /\.codex-plus-pro-settings-content[\s\S]*background:/);
+  assert.match(backgroundBlock, /\.codex-plus-pro-settings-footer[\s\S]*background:/);
+  assert.doesNotMatch(backgroundBlock, /min-height|padding|width|height|grid-template|font-size/);
+  assert.doesNotMatch(backgroundBlock, /\.codex-plus-pro-settings-choice/);
+ });
+
+test("settings navigation hover leaves the selected tab unchanged", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const hoverBlock = styles.slice(styles.lastIndexOf("/* Settings navigation hover:"));
+
+  assert.match(
+    hoverBlock,
+    /\.codex-plus-pro-settings-navigation-item:hover:not\(\[aria-selected="true"\]\)/,
+  );
+  assert.match(hoverBlock, /color:\s*var\(--codex-plus-accent-dark/);
+  assert.match(hoverBlock, /background:\s*color-mix\([\s\S]*--codex-plus-accent/);
+  assert.match(hoverBlock, /box-shadow:\s*inset 0 0 0 1px/);
+  assert.doesNotMatch(
+    styles,
+    /\.codex-plus-pro-settings-navigation-item\[aria-selected="true"\]:hover/,
+  );
+  assert.doesNotMatch(
+    hoverBlock,
+    /\.codex-plus-pro-settings-navigation-item\[aria-selected="true"\]:hover/,
+  );
+  assert.doesNotMatch(hoverBlock, /background-image:\s*linear-gradient/);
+  assert.doesNotMatch(hoverBlock, /outline:/);
+  assert.doesNotMatch(hoverBlock, /rgb\(48 35 30 \/ 0\.055\)/);
+});
+
+test("sidebar navigation text matches settings navigation contrast without strengthening subtitles", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const parityBlock = styles.slice(styles.lastIndexOf("/* Sidebar navigation text parity:"));
+
+  assert.match(parityBlock, /\.app-shell-left-panel nav \.text-fade-truncate/);
+  assert.match(parityBlock, /\.app-shell-left-panel nav \[data-thread-title="true"\]/);
+  assert.match(
+    parityBlock,
+    /color:\s*var\(--token-text-secondary, rgb\(48 35 30 \/ 0\.66\)\) !important/,
+  );
+  assert.match(parityBlock, /data-thread-secondary-title="true"/);
+  assert.match(
+    parityBlock,
+    /data-app-action-sidebar-thread-selected="true"[\s\S]*color:\s*var\(--token-text-primary, #30231e\) !important/,
+  );
+  assert.match(parityBlock, /:not\(\[data-thread-secondary-title="true"\]\)/);
+  assert.match(
+    parityBlock,
+    /\[data-thread-secondary-title="true"\][^{]*\{[\s\S]*color:\s*var\(--color-token-text-tertiary, rgba\(42 45 49 \/ 0\.54\)\) !important/,
+  );
 });

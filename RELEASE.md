@@ -1,5 +1,19 @@
 # Codex Plus Pro Windows — Release Notes
 
+## 1.8.7 (navigation contrast and accent-aware active view)
+
+**Status:** Refines the themed Codex shell after the latest UI update, keeping navigation states readable and tied to the selected accent.
+
+### Fixed
+
+- Active view button no longer uses the native fixed information-blue background; its background, border, icon, and hover state follow the selected theme accent.
+- Left sidebar navigation labels now match the settings navigation contrast, while conversation metadata keeps its weaker hierarchy.
+
+### Verification
+
+- 43/43 Node contract tests passed.
+- Injector syntax check and `git diff --check` passed.
+
 ## 1.8.6 (compatibility checklist and theme polish)
 
 **Status:** Adds route-aware Codex UI compatibility checks and refines the updated theme surfaces and button contrast.

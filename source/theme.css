@@ -3071,12 +3071,14 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   background: rgb(226 241 255 / 0.68);
 }
 
-:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="aria"] .codex-plus-pro-settings-choice:hover:not(:disabled) {
+:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="aria"]
+  .codex-plus-pro-settings-choice:hover:not(:disabled):not(.codex-plus-pro-compatibility-category) {
   color: #173b68;
   background: rgb(255 255 255 / 0.68);
 }
 
-:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="aria"] .codex-plus-pro-settings-choice[data-selected="true"] {
+:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="aria"]
+  .codex-plus-pro-settings-choice[data-selected="true"]:not(.codex-plus-pro-compatibility-category) {
   color: #f5faff;
   border-color: #1e4f8c;
   background: linear-gradient(145deg, #3b82c4 0%, #1e6fb0 100%);
@@ -3308,12 +3310,14 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   background: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 8%, rgb(255 255 255 / 0.58));
 }
 
-:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="adaptive"] .codex-plus-pro-settings-choice:hover:not(:disabled) {
+:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="adaptive"]
+  .codex-plus-pro-settings-choice:hover:not(:disabled):not(.codex-plus-pro-compatibility-category) {
   color: color-mix(in srgb, var(--codex-plus-accent-dark, #1e4f8c) 82%, #1f241f);
   background: color-mix(in srgb, var(--codex-plus-highlight, #7eb8e8) 12%, rgb(255 255 255 / 0.58));
 }
 
-:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="adaptive"] .codex-plus-pro-settings-choice[data-selected="true"] {
+:root[data-codex-pokedex-theme="on"][data-codex-plus-accent="adaptive"]
+  .codex-plus-pro-settings-choice[data-selected="true"]:not(.codex-plus-pro-compatibility-category) {
   color: #fff;
   border-color: var(--codex-plus-accent-dark, #1e4f8c);
   background:
@@ -5289,6 +5293,36 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   line-height: 16px !important;
 }
 
+/* Light action hints should read as part of the blue glass shell, not as dark
+   pills. Keep the gradient visible but let the surface and text carry most of
+   the contrast; the dark-theme rule above remains intentionally stronger. */
+:root[data-codex-pokedex-theme="on"]:not(.electron-dark)
+  [role="tooltip"][data-side="top"] {
+  border-color: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #3b82c4) 24%,
+    var(--color-token-border-default, transparent)
+  ) !important;
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(
+        in srgb,
+        var(--codex-plus-accent, #3b82c4) 10%,
+        var(--color-token-menu-background, #ffffff)
+      ) 0%,
+      color-mix(
+        in srgb,
+        var(--codex-plus-highlight, #7eb8e8) 7%,
+        var(--color-token-menu-background, #ffffff)
+      ) 100%
+    ) !important;
+  color: var(--codex-plus-accent-dark, #1e4f8c) !important;
+  box-shadow:
+    0 7px 18px color-mix(in srgb, var(--codex-plus-accent-dark, #1e4f8c) 10%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.78) !important;
+}
+
 /* Task sequence hover card: keep this portal-mounted tooltip separate from
    action hints while matching the light information-card treatment in the
    active theme. The DOM anchor is the composer sequence trigger, not a
@@ -5467,6 +5501,37 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   [class*="items-start"][class*="gap-2"]
   span[class*="leading-4"] {
   color: var(--color-token-text-secondary, #b9cbd1) !important;
+}
+
+/* Native hover diff preview. It is a portal-mounted tooltip, not the expanded
+   review surface; keep its original frame and scroll geometry intact. */
+:root[data-codex-pokedex-theme="on"]
+  [role="tooltip"][class*="diff-preview"] {
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* The native top-facing preview keeps a 420px flex track and bottom-aligns
+   its card. Let short previews size to their content so the unused track does
+   not become a large blank area above the card. Bottom-facing previews retain
+   the native available-height behavior. */
+:root[data-codex-pokedex-theme="on"]
+  [role="tooltip"][data-side="top"][class*="diff-preview"] {
+  box-sizing: border-box !important;
+  height: auto !important;
+  min-height: 0 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [role="tooltip"][class*="diff-preview"]
+  [data-testid="diff-preview-scroll"] {
+  box-sizing: border-box !important;
+  min-height: 0 !important;
+  max-height: 384px !important;
+  flex: 1 1 0% !important;
+  overflow: auto !important;
 }
 
 /* Profile menu: keep the portal-mounted Radix surface visually connected to
@@ -5701,86 +5766,57 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   color: var(--color-token-text-secondary, #b9cbd1) !important;
 }
 
-/* Native diff review surface (26.818+). Keep the code preview clipped to a
-   themed radius while preserving the native red/green diff rows and scrolling. */
+/* Native diff review surface (26.818+). Keep the review host aligned with the
+   native viewport and let the inner file-diff surface own the themed frame. */
 :root[data-codex-pokedex-theme="on"]
   div[class*="electron:bg-surface"]:has([class*="group/file-diff"]) {
   box-sizing: border-box !important;
-  border: 1px solid color-mix(
-    in srgb,
-    var(--codex-plus-accent, #277d91) 28%,
-    var(--color-token-border-default, transparent)
-  ) !important;
-  border-radius: 12px !important;
-  background-clip: padding-box !important;
-  background-color: var(--color-codex-diff-surface, var(--color-surface)) !important;
-  overflow: hidden auto !important;
-  clip-path: inset(0 round 12px) !important;
-}
-
-/* Code preview hosts should wrap their diff content instead of inheriting the
-   native full-height utility. Keep the host as the scroll boundary while
-   letting the rounded theme surface and inner diff card own natural height. */
-:root[data-codex-pokedex-theme="on"]
-  div[class*="electron:bg-surface"]:has([class*="group/file-diff"]) {
-  height: auto !important;
   min-height: 0 !important;
-  max-height: none !important;
-  flex: 0 1 auto !important;
-  background-color: transparent !important;
+  background-color: var(--color-codex-diff-surface, var(--color-surface)) !important;
   background-image: none !important;
   overflow: hidden auto !important;
 }
 
-/* The dedicated review host is a horizontal flex item. Preserve its panel
-   width, but stop the parent cross-axis stretch from making short previews
-   occupy the whole viewport; long diffs remain scrollable within the parent. */
+/* The dedicated review host is the native viewport and scroll boundary. Keep
+   its full-height track; only the inner file-diff surface gets a frame. */
 :root[data-codex-pokedex-theme="on"] #review-diffs-open {
   box-sizing: border-box !important;
-  height: auto !important;
+  height: 100% !important;
   min-height: 0 !important;
-  border: 1px solid color-mix(
-    in srgb,
-    var(--codex-plus-accent, #277d91) 28%,
-    var(--color-token-border-default, transparent)
-  ) !important;
-  border-radius: 12px !important;
-  background-clip: padding-box !important;
+  max-height: none !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   background-color: transparent !important;
   background-image: none !important;
   overflow: hidden auto !important;
-  clip-path: inset(0 round 12px) !important;
+  clip-path: none !important;
   flex: 1 1 0% !important;
-  align-self: flex-start !important;
-  max-height: 100% !important;
+  align-self: auto !important;
 }
 
 /* Codex 26.825+ renders the expanded editor through an anonymous full-height
-   flex column instead of the older review-diffs id. Anchor the layout fix to
-   its diff descendant so unrelated h-full panels keep their native sizing. */
+   flex column instead of the older review-diffs id. Preserve that native
+   full-height track and keep the themed frame on the inner diff surface.
+   Hover previews reuse the same diff classes inside a portal; keep this
+   expanded-only height track outside that tooltip subtree. */
 :root[data-codex-pokedex-theme="on"]
-  div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"]) {
+  div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"]):not(#review-diffs-open):not([role="tooltip"] *) {
   box-sizing: border-box !important;
-  height: auto !important;
+  height: 100% !important;
   min-height: 0 !important;
   max-height: none !important;
   flex: 0 1 auto !important;
-  align-self: flex-start !important;
-  border: 1px solid color-mix(
-    in srgb,
-    var(--codex-plus-accent, #277d91) 28%,
-    var(--color-token-border-default, transparent)
-  ) !important;
-  border-radius: 12px !important;
-  background-clip: padding-box !important;
+  align-self: auto !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   background-color: transparent !important;
   background-image: none !important;
-  overflow: hidden auto !important;
-  clip-path: inset(0 round 12px) !important;
+  overflow: visible !important;
+  clip-path: none !important;
 }
 
 :root[data-codex-pokedex-theme="on"]
-  div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"])
+  div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"]):not([role="tooltip"] *)
   [class*="overflow-clip"] {
   box-sizing: border-box !important;
   height: auto !important;
@@ -5818,19 +5854,15 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
 }
 
 :root[data-codex-pokedex-theme="on"][data-codex-plus-compat-diff-preview="fallback"]
-  div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"]) {
+  div[class*="h-full"][class*="flex-col"]:has([class*="group/file-diff"]):not(#review-diffs-open):not([role="tooltip"] *) {
   box-sizing: border-box !important;
-  height: auto !important;
+  height: 100% !important;
   min-height: 0 !important;
   max-height: none !important;
   flex: 0 1 auto !important;
-  overflow: hidden auto !important;
-  border: 1px solid color-mix(
-    in srgb,
-    var(--codex-plus-accent, #277d91) 28%,
-    var(--color-token-border-default, transparent)
-  ) !important;
-  border-radius: 12px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  overflow: visible !important;
 }
 
 :root[data-codex-pokedex-theme="on"] :is(
@@ -6353,45 +6385,81 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   display: grid;
   width: 100%;
   min-width: 0;
-  padding: 3px;
+  padding: 4px;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 3px;
-  border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 18%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 5%, transparent);
-  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.06);
+  gap: 4px;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 20%,
+    var(--color-token-border-default, transparent)
+  );
+  border-radius: 11px;
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 5%,
+    var(--color-token-main-surface-primary, rgb(255 250 239 / 0.86))
+  );
+  box-shadow:
+    inset 0 1px 2px rgb(0 0 0 / 0.05),
+    inset 0 -1px 0 rgb(255 255 255 / 0.42);
 }
 
 :root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category {
   box-sizing: border-box;
   width: auto;
   min-width: 0;
-  min-height: 34px;
-  padding-inline: 8px;
-  border-radius: 7px;
+  min-height: 36px;
+  padding-inline: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-token-text-secondary, var(--token-text-secondary, #55717b));
   font-size: 12px;
   font-weight: 650;
   line-height: 1.2;
   text-align: center;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease, box-shadow 140ms ease;
+  transition:
+    background-color 140ms ease,
+    background-image 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
 }
 
-:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 20%, transparent);
-  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 9%, transparent);
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category:hover:not(:disabled):not([data-selected="true"]) {
+  color: var(--codex-plus-accent-dark, #751522);
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 22%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 9%,
+    var(--color-token-main-surface-primary, rgb(255 250 239 / 0.86))
+  );
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.46);
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--codex-plus-highlight, #d29a18) 62%, transparent);
+  outline-offset: 1px;
 }
 
 :root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category[data-selected="true"] {
-  color: var(--token-button-foreground, #fffaf0);
-  border-color: var(--codex-plus-accent-dark, #751522);
-  background: linear-gradient(
-    145deg,
-    var(--codex-plus-accent, #b61f31),
-    var(--codex-plus-accent-dark, #751522)
+  color: var(--codex-plus-action-fg, var(--token-button-foreground, #fffaf0));
+  border-color: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 32%,
+    var(--color-token-border-default, transparent)
   );
-  box-shadow: 0 3px 8px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 22%, transparent);
+  background-color: var(--codex-plus-action-bg, var(--codex-plus-accent, #b61f31));
+  background-image: linear-gradient(
+    145deg,
+    var(--codex-plus-action-gradient-start, var(--codex-plus-accent, #b61f31)),
+    var(--codex-plus-action-gradient-end, var(--codex-plus-accent-dark, #751522))
+  );
+  box-shadow:
+    0 3px 8px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 14%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.52);
 }
 
 :root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-item {
@@ -6888,22 +6956,31 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   }
 }
 
-/* Button contrast polish: light actions use an airy accent surface, while
- * dark actions keep a stronger fill for readable white foregrounds. */
+/* Button contrast polish: light actions use a softened accent surface with
+ * distinct label and glyph tones; dark actions keep a stronger fill. */
 :root[data-codex-pokedex-theme="on"]:not(.electron-dark) {
   --codex-plus-action-bg: color-mix(
     in srgb,
-    var(--codex-plus-accent, #3b82c4) 62%,
+    var(--codex-plus-accent, #3b82c4) 54%,
     #ffffff
   );
   --codex-plus-action-bg-hover: color-mix(
     in srgb,
-    var(--codex-plus-accent, #3b82c4) 68%,
+    var(--codex-plus-accent, #3b82c4) 60%,
     #ffffff
   );
   --codex-plus-action-gradient-start: var(--codex-plus-action-bg);
   --codex-plus-action-gradient-end: var(--codex-plus-action-bg-hover);
-  --codex-plus-action-fg: var(--color-token-text-primary, #1f3a5f);
+  --codex-plus-action-fg: color-mix(
+    in srgb,
+    var(--codex-plus-accent-dark, #1e4f8c) 22%,
+    var(--color-token-text-primary, #1f3a5f)
+  );
+  --codex-plus-action-icon: color-mix(
+    in srgb,
+    var(--codex-plus-accent-dark, #1e4f8c) 42%,
+    var(--color-token-text-primary, #1f3a5f)
+  );
   --codex-plus-action-disabled-bg: color-mix(
     in srgb,
     var(--codex-plus-accent, #3b82c4) 12%,
@@ -6928,6 +7005,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   --codex-plus-action-gradient-start: var(--codex-plus-accent, #b61f31);
   --codex-plus-action-gradient-end: var(--codex-plus-action-bg);
   --codex-plus-action-fg: #ffffff;
+  --codex-plus-action-icon: #ffffff;
   --codex-plus-action-disabled-bg: color-mix(
     in srgb,
     var(--codex-plus-accent, #b61f31) 18%,
@@ -7016,7 +7094,8 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   opacity: 1 !important;
 }
 
-/* Composer voice controls are solid blue controls, so their glyphs must be light. */
+/* Composer voice controls use the softened blue action surface. Keep labels
+   and glyphs on separate dark-blue tones for a cleaner small-button read. */
 :root[data-codex-pokedex-theme="on"]
   :is(.composer-surface-chrome, [class*="composer-surface"], [data-codex-pokedex-composer="on"])
   button:is(
@@ -7087,7 +7166,7 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
     [aria-label*="microphone" i],
     [aria-label*="麦克风"],
     [aria-label*="录音"]
-  ) svg,
+  ):not(:disabled) svg,
 :root[data-codex-pokedex-theme="on"]
   :is(.composer-surface-chrome, [class*="composer-surface"], [data-codex-pokedex-composer="on"])
   button:is(
@@ -7097,7 +7176,33 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
     [aria-label*="microphone" i],
     [aria-label*="麦克风"],
     [aria-label*="录音"]
-  ) svg * {
+  ):not(:disabled) svg * {
+  color: var(--codex-plus-action-icon) !important;
+  stroke: var(--codex-plus-action-icon) !important;
+  fill: var(--codex-plus-action-icon) !important;
+  opacity: 1 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  :is(.composer-surface-chrome, [class*="composer-surface"], [data-codex-pokedex-composer="on"])
+  button:is(
+    [aria-label="听写"],
+    [aria-label="开始新的语音聊天"],
+    [aria-label*="voice" i],
+    [aria-label*="microphone" i],
+    [aria-label*="麦克风"],
+    [aria-label*="录音"]
+  ):disabled svg,
+:root[data-codex-pokedex-theme="on"]
+  :is(.composer-surface-chrome, [class*="composer-surface"], [data-codex-pokedex-composer="on"])
+  button:is(
+    [aria-label="听写"],
+    [aria-label="开始新的语音聊天"],
+    [aria-label*="voice" i],
+    [aria-label*="microphone" i],
+    [aria-label*="麦克风"],
+    [aria-label*="录音"]
+  ):disabled svg * {
   color: currentColor !important;
   stroke: currentColor !important;
   fill: currentColor !important;
@@ -7249,4 +7354,936 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   .codex-pokedex-flat-picker-option[data-selected="true"]
   .codex-pokedex-flat-picker-switch-thumb {
   background: #ffffff !important;
+}
+
+/* Legacy themed settings controls are retained above for older runtime paths.
+   The native-parity rules at the end keep the current settings surface stable. */
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-popover {
+  --codex-plus-settings-control-surface: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #3b82c4) 5%,
+    var(--color-token-main-surface-primary, rgb(255 255 255 / 0.86))
+  );
+  --codex-plus-settings-control-hover: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #3b82c4) 10%,
+    var(--color-token-main-surface-primary, rgb(255 255 255 / 0.86))
+  );
+  --codex-plus-settings-control-border: var(
+    --codex-plus-ui-border,
+    color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 18%, transparent)
+  );
+  --codex-plus-settings-control-text: var(
+    --color-token-text-secondary,
+    var(--token-text-secondary, rgb(48 35 30 / 0.68))
+  );
+  --codex-plus-settings-preview-surface: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #3b82c4) 8%,
+    var(--color-token-main-surface-primary, rgb(255 255 255 / 0.9))
+  );
+  --codex-plus-settings-selected-start: var(--codex-plus-accent, #3b82c4);
+  --codex-plus-settings-selected-end: var(--codex-plus-accent-dark, #1e4f8c);
+  --codex-plus-settings-selected-fg: #ffffff;
+}
+
+:root[data-codex-pokedex-theme="on"].electron-dark .codex-plus-pro-settings-popover {
+  --codex-plus-settings-control-surface: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 9%,
+    var(--color-token-main-surface-primary, rgb(28 24 26 / 0.9))
+  );
+  --codex-plus-settings-control-hover: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 16%,
+    var(--color-token-main-surface-primary, rgb(28 24 26 / 0.9))
+  );
+  --codex-plus-settings-preview-surface: color-mix(
+    in srgb,
+    var(--codex-plus-accent-dark, #751522) 14%,
+    var(--color-token-main-surface-primary, rgb(28 24 26 / 0.9))
+  );
+  --codex-plus-settings-selected-start: var(--codex-plus-accent, #3b82c4);
+  --codex-plus-settings-selected-end: var(--codex-plus-accent-dark, #751522);
+  --codex-plus-settings-selected-fg: #ffffff;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choices:not(.codex-plus-pro-compatibility-categories) {
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 4px;
+  border: 1px solid var(--codex-plus-settings-control-border);
+  border-radius: 10px;
+  background: var(--codex-plus-settings-control-surface);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.4),
+    inset 0 -1px 0 rgb(0 0 0 / 0.04);
+  gap: 4px;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choices:not(.codex-plus-pro-settings-color-choices):not(
+    .codex-plus-pro-compatibility-categories
+  ) {
+  display: grid;
+  width: min(100%, 216px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-color-choices {
+  display: grid;
+  width: min(100%, 390px);
+  grid-auto-rows: minmax(36px, auto);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category) {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 12px;
+  color: var(--codex-plus-settings-control-text);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font-weight: 600;
+  transition:
+    background-color 140ms ease,
+    background-image 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category):hover:not(:disabled) {
+  color: var(--color-token-text-primary, var(--token-text-primary, #1f3a5f));
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 24%, transparent);
+  background: var(--codex-plus-settings-control-hover);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.54);
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category)[data-selected="true"] {
+  color: var(--codex-plus-settings-selected-fg) !important;
+  border-color: var(--codex-plus-settings-selected-end) !important;
+  background-color: var(--codex-plus-settings-selected-start) !important;
+  background-image: linear-gradient(
+    145deg,
+    var(--codex-plus-settings-selected-start),
+    var(--codex-plus-settings-selected-end)
+  ) !important;
+  box-shadow:
+    0 3px 9px color-mix(in srgb, var(--codex-plus-settings-selected-end) 26%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.42) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+.codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category)[data-selected="true"]:hover {
+  color: var(--codex-plus-settings-selected-fg) !important;
+  border-color: var(--codex-plus-settings-selected-end) !important;
+  background-color: var(--codex-plus-settings-selected-end) !important;
+  background-image: linear-gradient(
+    145deg,
+    var(--codex-plus-settings-selected-start),
+    var(--codex-plus-settings-selected-end)
+  ) !important;
+  box-shadow:
+    0 4px 11px color-mix(in srgb, var(--codex-plus-settings-selected-end) 32%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.5) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category):disabled {
+  color: var(--codex-plus-action-disabled-fg) !important;
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 22%, transparent) !important;
+  background-color: var(--codex-plus-action-disabled-bg) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--codex-plus-highlight, #7eb8e8) 68%, transparent);
+  outline-offset: 2px;
+}
+
+/* The section tabs use the same geometry and selected treatment as their
+   sibling setting controls. Keep the status dot readable on the filled tab. */
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation-item {
+  box-sizing: border-box;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 12px;
+  gap: 8px;
+  color: var(--codex-plus-settings-control-text);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition:
+    background-color 140ms ease,
+    background-image 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation-item:hover {
+  color: var(--color-token-text-primary, var(--token-text-primary, #1f3a5f));
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 24%, transparent);
+  background: var(--codex-plus-settings-control-hover);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.54);
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-navigation-item[aria-selected="true"] {
+  color: var(--codex-plus-settings-selected-fg) !important;
+  border-color: var(--codex-plus-settings-selected-end) !important;
+  background-color: var(--codex-plus-settings-selected-start) !important;
+  background-image: linear-gradient(
+    145deg,
+    var(--codex-plus-settings-selected-start),
+    var(--codex-plus-settings-selected-end)
+  ) !important;
+  box-shadow:
+    0 3px 9px color-mix(in srgb, var(--codex-plus-settings-selected-end) 26%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.42) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-navigation-item[aria-selected="true"]
+  .codex-plus-pro-settings-status {
+  border-color: rgb(255 255 255 / 0.78);
+  background: rgb(255 255 255 / 0.92);
+  box-shadow: 0 0 0 3px rgb(255 255 255 / 0.16);
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-navigation-item[aria-selected="true"]
+  > span:last-child {
+  color: inherit;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-color-choice[data-selected="true"]
+  .codex-plus-pro-settings-swatch {
+  border-color: color-mix(in srgb, var(--settings-choice-color) 62%, var(--codex-plus-action-fg));
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.4),
+    0 0 0 2px color-mix(in srgb, var(--settings-choice-color) 24%, transparent);
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  :is(.codex-plus-pro-settings-upload, .codex-plus-pro-settings-upgrade:not(.codex-plus-pro-compatibility-repair)),
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer .codex-plus-pro-settings-reset {
+  box-sizing: border-box;
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  color: var(--codex-plus-action-fg);
+  border: 1px solid var(--codex-plus-settings-control-border);
+  border-radius: 8px;
+  background: var(--codex-plus-settings-control-surface);
+  background-image: none;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.46);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1.2;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  :is(.codex-plus-pro-settings-upload, .codex-plus-pro-settings-upgrade:not(.codex-plus-pro-compatibility-repair)):hover:not(:disabled),
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer .codex-plus-pro-settings-reset:hover:not(:disabled) {
+  color: var(--color-token-text-primary, var(--token-text-primary, #1f3a5f));
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 34%, transparent);
+  background: var(--codex-plus-settings-control-hover);
+  box-shadow:
+    0 3px 9px color-mix(in srgb, var(--codex-plus-accent-dark, #1e4f8c) 12%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.58);
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-upgrade:disabled {
+  color: var(--codex-plus-action-disabled-fg) !important;
+  border-color: color-mix(in srgb, var(--codex-plus-accent, #3b82c4) 22%, transparent) !important;
+  background-color: var(--codex-plus-action-disabled-bg) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  cursor: not-allowed;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-settings-section="theme"]
+  :is(.codex-plus-pro-settings-wallpaper-preview, .codex-plus-pro-settings-logo-preview) {
+  border: 1px solid var(--codex-plus-settings-control-border);
+  border-radius: 10px;
+  background-color: var(--codex-plus-settings-preview-surface);
+  background-clip: padding-box;
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.42),
+    0 5px 14px color-mix(in srgb, var(--codex-plus-accent-dark, #1e4f8c) 10%, transparent);
+}
+
+@media (max-width: 700px) {
+  :root[data-codex-pokedex-theme="on"]
+    .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+    .codex-plus-pro-settings-choices:not(.codex-plus-pro-settings-color-choices):not(
+      .codex-plus-pro-compatibility-categories
+    ) {
+    width: min(100%, 216px);
+  }
+
+  :root[data-codex-pokedex-theme="on"]
+    [data-settings-section="theme"]
+    :is(.codex-plus-pro-settings-wallpaper-control, .codex-plus-pro-settings-logo-control) {
+    grid-template-columns: 112px minmax(0, 1fr);
+  }
+
+  :root[data-codex-pokedex-theme="on"]
+    [data-settings-section="theme"]
+    .codex-plus-pro-settings-wallpaper-preview {
+    width: 112px;
+  }
+
+  :root[data-codex-pokedex-theme="on"]
+    [data-settings-section="theme"]
+    .codex-plus-pro-settings-logo-preview {
+    width: 64px;
+    height: 64px;
+  }
+}
+
+/* Settings original parity: keep the original settings surface even while
+   the main Codex workspace theme is enabled. */
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-backdrop {
+  background: rgb(24 18 16 / 0.28) !important;
+  -webkit-backdrop-filter: blur(2px) !important;
+  backdrop-filter: blur(2px) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-popover {
+  color: var(--token-text-primary, #30231e) !important;
+  border-color: var(--token-border-light, rgb(74 52 45 / 0.16)) !important;
+  background: var(--token-main-surface-primary, #fffaf0) !important;
+  background-image: none !important;
+  box-shadow: 0 24px 72px rgb(39 27 23 / 0.28) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-header {
+  border-bottom-color: var(--token-border-light, rgb(74 52 45 / 0.11)) !important;
+  background: rgb(255 253 247 / 0.82) !important;
+  background-image: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-title {
+  color: var(--token-text-primary, #30231e) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-subtitle {
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.58)) !important;
+  white-space: normal !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation {
+  border-right-color: var(--token-border-light, rgb(74 52 45 / 0.1)) !important;
+  background: rgb(77 58 49 / 0.035) !important;
+  background-image: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation-item {
+  height: auto !important;
+  min-height: 40px !important;
+  padding: 0 12px !important;
+  gap: 10px !important;
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.66)) !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  background-image: none !important;
+  font: inherit !important;
+  font-weight: 580 !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation-item:hover {
+  color: var(--token-text-primary, #30231e) !important;
+  border-color: transparent !important;
+  background: rgb(48 35 30 / 0.055) !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-navigation-item[aria-selected="true"] {
+  color: var(--codex-plus-accent-dark, #751522) !important;
+  border-color: transparent !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 10%, transparent) !important;
+  background-image: none !important;
+  box-shadow: inset 3px 0 0 var(--codex-plus-accent, #b61f31) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-status {
+  width: 7px !important;
+  height: 7px !important;
+  flex: 0 0 7px !important;
+  border: 1px solid rgb(48 35 30 / 0.22) !important;
+  border-radius: 50% !important;
+  background: rgb(48 35 30 / 0.12) !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-navigation-item[data-enabled="true"]
+  .codex-plus-pro-settings-status {
+  border-color: var(--codex-plus-accent, #b61f31) !important;
+  background: var(--codex-plus-accent, #b61f31) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--codex-plus-accent, #b61f31) 10%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-content {
+  background: transparent !important;
+  background-image: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-section h2 {
+  color: var(--token-text-primary, #30231e) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-row {
+  border-top-color: var(--token-border-light, rgb(74 52 45 / 0.1)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-label {
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.64)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-text-value-primary {
+  color: var(--token-text-primary, #30231e) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-text-value-secondary {
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.58)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choices {
+  display: inline-flex !important;
+  width: auto !important;
+  min-height: 0 !important;
+  padding: 2px !important;
+  border: 1px solid rgb(74 52 45 / 0.12) !important;
+  border-radius: 6px !important;
+  background: rgb(74 52 45 / 0.045) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  gap: 2px !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-color-choices {
+  display: grid !important;
+  width: min(100%, 390px) !important;
+  grid-auto-rows: auto !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category) {
+  box-sizing: border-box !important;
+  width: auto !important;
+  min-width: 68px !important;
+  height: auto !important;
+  min-height: 32px !important;
+  padding: 0 11px !important;
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.65)) !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  font: inherit !important;
+  font-weight: 580 !important;
+  transition: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-color-choice {
+  width: 100% !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-compatibility-category):hover:not(:disabled) {
+  color: var(--token-text-primary, #30231e) !important;
+  border-color: transparent !important;
+  background: rgb(255 255 255 / 0.52) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:not(.codex-plus-pro-settings-color-choice):not(
+    .codex-plus-pro-compatibility-category
+  )[data-selected="true"] {
+  color: var(--token-button-foreground, #fffaf0) !important;
+  border-color: var(--codex-plus-accent-dark, #751522) !important;
+  background: var(--codex-plus-accent, #b61f31) !important;
+  background-image: none !important;
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 22%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-color-choice[data-selected="true"] {
+  color: var(--token-text-primary, #30231e) !important;
+  border-color: color-mix(in srgb, var(--settings-choice-color) 68%, #30231e) !important;
+  background: rgb(255 255 255 / 0.72) !important;
+  background-image: none !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--settings-choice-color) 20%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-choice:disabled {
+  cursor: not-allowed !important;
+  opacity: 0.36 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  .codex-plus-pro-settings-swatch {
+  width: 13px !important;
+  height: 13px !important;
+  flex: 0 0 13px !important;
+  border: 1px solid rgb(48 35 30 / 0.18) !important;
+  border-radius: 50% !important;
+  background: var(--settings-choice-color) !important;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.22) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  :is(.codex-plus-pro-settings-upload, .codex-plus-pro-settings-upgrade),
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer .codex-plus-pro-settings-reset {
+  min-height: 30px !important;
+  height: auto !important;
+  padding: 0 10px !important;
+  color: var(--codex-plus-accent-dark, #751522) !important;
+  border: 1px solid color-mix(in srgb, var(--codex-plus-accent, #b61f31) 25%, transparent) !important;
+  border-radius: 5px !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 7%, transparent) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  font: inherit !important;
+  font-weight: 600 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  :is(.codex-plus-pro-settings-upload, .codex-plus-pro-settings-upgrade):hover:not(:disabled),
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer .codex-plus-pro-settings-reset:hover:not(:disabled) {
+  color: var(--token-text-primary, #30231e) !important;
+  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 12%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-section:not([data-settings-section="compatibility"])
+  :is(.codex-plus-pro-settings-upload, .codex-plus-pro-settings-upgrade):disabled,
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer .codex-plus-pro-settings-reset:disabled {
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.48)) !important;
+  border-color: rgb(128 128 128 / 0.18) !important;
+  background: rgb(128 128 128 / 0.08) !important;
+  opacity: 0.72 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-settings-section="theme"]
+  .codex-plus-pro-settings-wallpaper-preview {
+  width: 132px !important;
+  border: 1px solid rgb(74 52 45 / 0.14) !important;
+  border-radius: 6px !important;
+  background-color: #f2eadb !important;
+  background-image: var(--codex-pokedex-wallpaper) !important;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.35) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-settings-section="theme"]
+  .codex-plus-pro-settings-logo-preview {
+  width: 72px !important;
+  height: 72px !important;
+  border: 1px solid rgb(74 52 45 / 0.14) !important;
+  border-radius: 12px !important;
+  background-color: color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 88%, #1a1010) !important;
+  background-image: var(--codex-pokedex-ball-logo) !important;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer {
+  border-top-color: var(--token-border-light, rgb(74 52 45 / 0.1)) !important;
+  background: rgb(255 253 247 / 0.72) !important;
+  background-image: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-toolbar {
+  align-items: initial !important;
+  padding-block: 0 !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-toolbar > button {
+  min-height: 30px !important;
+  border-radius: 5px !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-toolbar
+  > button:not(.codex-plus-pro-compatibility-repair) {
+  background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 7%, transparent) !important;
+  background-image: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-repair {
+  color: var(--token-button-foreground, #fffaf0) !important;
+  border-color: var(--codex-plus-accent-dark, #751522) !important;
+  background: var(--codex-plus-accent, #b61f31) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-categories {
+  box-sizing: border-box !important;
+  display: grid !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 2px !important;
+  grid-auto-flow: row !important;
+  grid-auto-columns: auto !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+  gap: 2px !important;
+  border: 1px solid rgb(74 52 45 / 0.12) !important;
+  border-radius: 6px !important;
+  background: rgb(74 52 45 / 0.045) !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category {
+  box-sizing: border-box !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: auto !important;
+  min-height: 32px !important;
+  padding: 0 11px !important;
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.65)) !important;
+  border: 1px solid transparent !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  background-image: none !important;
+  font: inherit !important;
+  font-weight: 580 !important;
+  line-height: normal !important;
+  transition: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category:hover:not(:disabled):not([data-selected="true"]) {
+  color: var(--token-text-primary, #30231e) !important;
+  border-color: transparent !important;
+  background: rgb(255 255 255 / 0.52) !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category[data-selected="true"] {
+  color: var(--token-button-foreground, #fffaf0) !important;
+  border-color: var(--codex-plus-accent-dark, #751522) !important;
+  background: var(--codex-plus-accent, #b61f31) !important;
+  background-image: none !important;
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--codex-plus-accent-dark, #751522) 22%, transparent) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-item {
+  padding: 12px 0 !important;
+  margin-inline: 0 !important;
+  border-top-color: var(--token-border-light, rgb(74 52 45 / 0.1)) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  transition: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-item:hover {
+  background: transparent !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-status {
+  gap: normal !important;
+  box-shadow: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-status::before {
+  display: none !important;
+}
+
+@media (max-width: 700px) {
+  :root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-categories {
+    display: flex !important;
+    gap: 4px !important;
+  }
+
+  :root[data-codex-pokedex-theme="on"] .codex-plus-pro-compatibility-category {
+    width: auto !important;
+    min-width: 92px !important;
+    flex: 0 0 auto !important;
+  }
+}
+
+/* Settings themed background: let the surface follow the active theme while
+   leaving the native-parity controls above responsible for their geometry. */
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-backdrop {
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent-dark, #751522) 12%,
+    rgb(0 0 0 / 0.24)
+  ) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-popover {
+  background-color: var(
+    --color-token-main-surface-primary,
+    var(--token-main-surface-primary, #fffaf0)
+  ) !important;
+  background-image:
+    linear-gradient(
+      145deg,
+      color-mix(
+        in srgb,
+        var(--codex-plus-accent, #b61f31) 10%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      ) 0%,
+      color-mix(
+        in srgb,
+        var(--codex-plus-highlight, #d29a18) 6%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      ) 52%,
+      color-mix(
+        in srgb,
+        var(--codex-plus-accent-dark, #751522) 7%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      ) 100%
+    ),
+    var(--codex-pokedex-wallpaper) !important;
+  background-position: center, center !important;
+  background-repeat: no-repeat !important;
+  background-size: cover !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-header {
+  background:
+    linear-gradient(
+      100deg,
+      color-mix(
+        in srgb,
+        var(--codex-plus-accent, #b61f31) 9%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      ),
+      color-mix(
+        in srgb,
+        var(--codex-plus-highlight, #d29a18) 5%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      )
+    ) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(
+        in srgb,
+        var(--codex-plus-accent, #b61f31) 7%,
+        var(
+          --color-token-side-bar-background,
+          var(--color-token-main-surface-primary, #fffaf0)
+        )
+      ),
+      color-mix(
+        in srgb,
+        var(--codex-plus-highlight, #d29a18) 3%,
+        var(
+          --color-token-side-bar-background,
+          var(--color-token-main-surface-primary, #fffaf0)
+        )
+      )
+    ) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-content {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--codex-plus-accent, #b61f31) 4%, transparent),
+      color-mix(in srgb, var(--codex-plus-highlight, #d29a18) 2%, transparent) 56%,
+      transparent 100%
+    ) !important;
+}
+
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-footer {
+  background:
+    linear-gradient(
+      100deg,
+      color-mix(
+        in srgb,
+        var(--codex-plus-accent, #b61f31) 6%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      ),
+      color-mix(
+        in srgb,
+        var(--codex-plus-highlight, #d29a18) 3%,
+        var(--color-token-main-surface-primary, #fffaf0)
+      )
+    ) !important;
+}
+
+/* Settings navigation hover: keep feedback on inactive tabs; the selected tab
+   reuses its base state without an additional hover treatment. */
+:root[data-codex-pokedex-theme="on"] .codex-plus-pro-settings-navigation-item {
+  transition:
+    background-color 140ms ease,
+    background-image 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .codex-plus-pro-settings-navigation-item:hover:not([aria-selected="true"]) {
+  color: var(--codex-plus-accent-dark, #751522) !important;
+  border-color: transparent !important;
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 7%,
+    var(--color-token-main-surface-primary, #fffaf0)
+  ) !important;
+  background-image: none !important;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--codex-plus-accent, #b61f31) 22%, transparent),
+    inset 0 1px 0 rgb(255 255 255 / 0.45) !important;
+}
+
+/* Sidebar navigation text parity: match settings labels without flattening
+   the weaker metadata line under each conversation. */
+:root[data-codex-pokedex-theme="on"] .app-shell-left-panel nav .text-fade-truncate:not([data-thread-secondary-title="true"]),
+:root[data-codex-pokedex-theme="on"] .app-shell-left-panel nav [data-thread-title="true"]:not([data-thread-secondary-title="true"]),
+:root[data-codex-pokedex-theme="on"] .app-shell-left-panel nav [data-thread-title="true"]:not([data-thread-secondary-title="true"]) * {
+  color: var(--token-text-secondary, rgb(48 35 30 / 0.66)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav [data-thread-secondary-title="true"] {
+  color: var(--color-token-text-tertiary, rgba(42 45 49 / 0.54)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  .sidebar-item[data-app-action-sidebar-thread-selected="true"]
+  [data-thread-title="true"],
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  .sidebar-item[data-app-action-sidebar-thread-selected="true"]
+  [data-thread-title="true"] *,
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  .sidebar-item[data-app-action-sidebar-thread-active="true"]
+  [data-thread-title="true"],
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  .sidebar-item[data-app-action-sidebar-thread-active="true"]
+  [data-thread-title="true"] * {
+  color: var(--token-text-primary, #30231e) !important;
+}
+
+/* Active view button theme parity: replace the native info-blue wash with the
+   selected accent while keeping the compact toolbar geometry intact. */
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  button[aria-pressed="true"][aria-label*="活动视图"],
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  button[aria-pressed="true"][aria-label*="active view"] {
+  color: var(--codex-plus-accent-dark, #751522) !important;
+  border-color: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 30%,
+    transparent
+  ) !important;
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 13%,
+    var(
+      --color-token-side-bar-background,
+      var(--color-token-main-surface-primary, transparent)
+    )
+  ) !important;
+  background-image: none !important;
+  box-shadow: inset 0 0 0 1px color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 24%,
+    transparent
+  ) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  button[aria-pressed="true"][aria-label*="活动视图"]:hover,
+:root[data-codex-pokedex-theme="on"]
+  .app-shell-left-panel nav
+  button[aria-pressed="true"][aria-label*="active view"]:hover {
+  background: color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 18%,
+    var(
+      --color-token-side-bar-background,
+      var(--color-token-main-surface-primary, transparent)
+    )
+  ) !important;
+  background-image: none !important;
+  box-shadow: inset 0 0 0 1px color-mix(
+    in srgb,
+    var(--codex-plus-accent, #b61f31) 34%,
+    transparent
+  ) !important;
 }

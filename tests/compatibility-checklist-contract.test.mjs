@@ -80,7 +80,7 @@ test("compatibility settings UI exposes categorized detection and repair control
     fs.readFile(new URL("../source/theme.css", import.meta.url), "utf8"),
   ]);
 
-  assert.match(source, /const SETTINGS_UI_VERSION = "win-settings-scope-b2-1\.8\.6-taskboard-service-compatibility-v2"/);
+  assert.match(source, /const SETTINGS_UI_VERSION = "win-settings-scope-b2-1\.8\.7-taskboard-service-compatibility-v2"/);
   assert.match(source, /key: "compatibility", label: "界面兼容性", feature: "compatibility"/);
   for (const label of ["全部", "全局", "对话界面", "编程界面", "设置界面"]) {
     assert.match(source, new RegExp(label));
