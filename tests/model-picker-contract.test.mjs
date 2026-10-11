@@ -5,86 +5,24 @@ import test from "node:test";
 const injectorSourcePath = new URL("../source/injector.mjs", import.meta.url);
 const themeStylesPath = new URL("../source/theme.css", import.meta.url);
 
-test("model picker uses a version-tolerant composer surface contract", async () => {
+test("model picker keeps the themed control bar while using Codex native state", async () => {
   const [injectorSource, themeStyles] = await Promise.all([
     fs.readFile(injectorSourcePath, "utf8"),
     fs.readFile(themeStylesPath, "utf8"),
   ]);
 
-  assert.match(injectorSource, /const findFlatPickerSurface = \(trigger\) =>/);
-  assert.match(injectorSource, /const findFlatPickerTrigger = \(surface\) =>/);
-  assert.match(injectorSource, /\[role="button"\]/);
-  assert.match(injectorSource, /\[aria-haspopup="menu"\]/);
-  assert.match(injectorSource, /depth < 14/);
-  assert.match(injectorSource, /FLAT_PICKER_TRIGGER_SELECTOR/);
-  assert.match(themeStyles, /\[data-codex-intelligence-trigger="true"\]/);
-  assert.match(injectorSource, /5\.6 Luna/);
-  assert.match(injectorSource, /findFlatPickerTrigger\(surface\)/);
-  assert.ok(
-    (injectorSource.match(/findFlatPickerSurface\(/g) || []).length >= 2,
-    "surface discovery must be used by both picker runtime paths",
-  );
-  assert.match(themeStyles, /\[data-codex-pokedex-flat-picker-surface="on"\]/);
-  assert.match(themeStyles, /max-width:\s*100% !important/);
-  assert.match(themeStyles, /grid-column:\s*1 \/ -1 !important/);
-  assert.match(themeStyles, /grid-row:\s*3 !important/);
-  assert.match(themeStyles, /overflow-x:\s*hidden !important/);
-  assert.match(themeStyles, /overflow-y:\s*hidden !important/);
-  assert.match(themeStyles, /height:\s*fit-content !important/);
-  assert.match(themeStyles, /min-height:\s*0 !important/);
-  assert.match(themeStyles, /max-height:\s*fit-content !important/);
-  assert.match(themeStyles, /flex:\s*0 0 auto !important/);
-  assert.match(themeStyles, /box-sizing:\s*border-box/);
-  assert.match(themeStyles, /border-top:\s*0 !important/);
-  const flatPickerLayoutRule = themeStyles.match(
-    /:root\[data-codex-plus-model-picker="on"\] \[data-codex-pokedex-flat-picker-surface="on"\]\s*> \.codex-pokedex-flat-picker\s*\{[^}]+\}/,
-  )?.[0] || "";
-  assert.match(flatPickerLayoutRule, /margin:\s*8px 0 0 !important/);
-  assert.match(themeStyles, /width:\s*auto !important/);
-  assert.match(themeStyles, /gap:\s*6px 10px;/);
-  assert.match(themeStyles, /padding:\s*2px 8px;/);
-  assert.match(themeStyles, /gap:\s*2px;/);
-  assert.match(themeStyles, /padding:\s*2px;/);
-  assert.match(themeStyles, /border:\s*1px solid/);
-  assert.match(themeStyles, /border-radius:\s*6px;/);
-  const hoverRule = themeStyles.match(
-    /:root\[data-codex-plus-model-picker="on"\] \.codex-pokedex-flat-picker-option:hover:not\(:disabled\)\s*\{[^}]+\}/,
-  )?.[0] || "";
-  assert.match(hoverRule, /color:\s*var\(--codex-plus-accent-dark/);
-  assert.match(hoverRule, /border-color:\s*color-mix\(in srgb, var\(--codex-plus-accent/);
-  assert.match(hoverRule, /background:\s*color-mix\(in srgb, var\(--codex-plus-accent/);
-});
-
-test("model picker density modes keep stable targets and responsive overflow", async () => {
-  const themeStyles = await fs.readFile(themeStylesPath, "utf8");
-
-  const comfortableBlock = themeStyles.match(
-    /:root\[data-codex-plus-model-picker="on"\]\[data-codex-plus-model-density="comfortable"\]\s+\.codex-pokedex-flat-picker\s*\{[^}]+\}/,
-  )?.[0] || "";
-  assert.match(comfortableBlock, /min-height:\s*48px/);
-  assert.match(comfortableBlock, /padding:\s*7px 10px 9px/);
-  assert.match(comfortableBlock, /border-radius:\s*10px/);
-
-  const comfortableOptionBlock = themeStyles.match(
-    /:root\[data-codex-plus-model-picker="on"\]\[data-codex-plus-model-density="comfortable"\][\s\S]*?\.codex-pokedex-flat-picker-option\s*\{[^}]+\}/,
-  )?.[0] || "";
-  assert.match(comfortableOptionBlock, /height:\s*30px/);
-  assert.match(comfortableOptionBlock, /min-width:\s*36px/);
-  assert.match(comfortableOptionBlock, /padding-right:\s*10px/);
-
-  assert.match(
-    themeStyles,
-    /@media \(max-width: 700px\)[\s\S]*?\.codex-pokedex-flat-picker\s*\{[\s\S]*?flex-wrap:\s*nowrap[\s\S]*?overflow-x:\s*auto[\s\S]*?scrollbar-width:\s*thin/,
-  );
-});
-
-test("compact model picker keeps a top separator without bottom spacing", async () => {
-  const themeStyles = await fs.readFile(themeStylesPath, "utf8");
-  const compactBlock = themeStyles.match(
-    /:root\[data-codex-plus-model-picker="on"\]\[data-codex-plus-model-density="compact"\]\s+\.codex-pokedex-flat-picker\s*\{[^}]+\}/,
-  )?.[0] || "";
-
-  assert.match(compactBlock, /border-top:\s*1px solid color-mix/);
-  assert.match(compactBlock, /padding-bottom:\s*2px/);
-  assert.match(compactBlock, /margin-bottom:\s*0 !important/);
+  assert.match(injectorSource, /id: "conversation\.model-picker"/);
+  assert.match(injectorSource, /data-codex-intelligence-trigger/);
+  assert.match(injectorSource, /native-model-picker/);
+  assert.match(injectorSource, /const decorateFlatPicker/);
+  assert.match(injectorSource, /findModelPickerInterface/);
+  assert.match(injectorSource, /const waitForPageCondition = async \(predicate, timeoutMs = \d+\) =>/);
+  assert.match(injectorSource, /onSelectModel/);
+  assert.match(injectorSource, /powerSelections/);
+  assert.match(injectorSource, /onSelectPower/);
+  assert.match(injectorSource, /onSelectReasoningEffort/);
+  assert.match(injectorSource, /onSelectServiceTier/);
+  assert.match(injectorSource, /data-codex-pokedex-flat-picker-surface/);
+  assert.match(themeStyles, /codex-pokedex-flat-picker/);
+  assert.match(themeStyles, /data-codex-plus-model-picker/);
 });

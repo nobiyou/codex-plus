@@ -4,10 +4,7 @@
 param(
   [string]$OfficialVersion = "latest",
   [switch]$UseStoreAppx,
-  [switch]$UseLegacyLocalCurrent,
-  [string]$TaskboardRoot,
-  [int]$TaskboardPort = 0,
-  [switch]$DisableTaskboard
+  [switch]$UseLegacyLocalCurrent
 )
 
 Set-StrictMode -Version Latest
@@ -20,8 +17,6 @@ $InjectorPath = Join-Path $SourceDir "injector.mjs"
 $CssPath = Join-Path $SourceDir "theme.css"
 $WallpaperPath = Join-Path $SourceDir "assets\pokemon-onsen.jpg"
 $LogoPath = Join-Path $SourceDir "assets\pokeball-logo-white.png"
-$TaskboardRuntimePath = Join-Path $ScriptRoot "taskboard-runtime.psm1"
-$TaskboardStateRoot = Join-Path $env:LOCALAPPDATA "Codex-Plus-Pro\taskboard"
 
 $StateRoot = Join-Path $env:LOCALAPPDATA "Codex-Plus-Pro"
 $LogDir = Join-Path $StateRoot "logs"
@@ -167,8 +162,6 @@ if (-not (Test-Path $WallpaperPath)) { Show-ErrorDialog "Missing wallpaper asset
 if (-not (Test-Path $LogoPath)) { Show-ErrorDialog "Missing logo asset"; exit 1 }
 if (-not (Test-Path $ResolverPath)) { Show-ErrorDialog "Missing official-codex.psm1"; exit 1 }
 Import-Module $ResolverPath -Force
-if (-not (Test-Path $TaskboardRuntimePath)) { Show-ErrorDialog "Missing taskboard-runtime.psm1"; exit 1 }
-Import-Module $TaskboardRuntimePath -Force
 
 $nodePath = Find-NodeExecutable
 if (-not $nodePath) {
@@ -291,96 +284,12 @@ if (Test-PortInUse -Port $rendererPort) {
 
 Write-AppLog "Cleanup complete. Proceeding to activation."
 
-$taskboardStatus = $null
-$taskboardEnabled = $false
-if (-not $DisableTaskboard) {
-  try {
-    $taskboardStatus = Start-CodexPlusTaskboard -Root $TaskboardRoot -Port $TaskboardPort -NodePath $nodePath -StateRoot $TaskboardStateRoot
-    if ($taskboardStatus.Healthy) {
-      $taskboardEnabled = $true
-      Write-AppLog ("Taskboard ready on " + $taskboardStatus.EmbedUrl + " (PID " + $taskboardStatus.ProcessId + ")")
-    } else {
-      Write-AppLog ("Taskboard unavailable; continuing without sidebar entry: " + $taskboardStatus.Reason)
-    }
-  } catch {
-    Write-AppLog ("Taskboard startup failed; continuing without sidebar entry: " + $_.Exception.Message)
-  }
-} else {
-  Write-AppLog "Taskboard integration disabled by launch switch."
-}
 
 # Codex++ style: inspect = debug_port + 100
 $inspectorPort = [Math]::Min(65535, $rendererPort + 100)
 $argumentLine = "--remote-debugging-port=$rendererPort --remote-allow-origins=http://127.0.0.1:$rendererPort --inspect=127.0.0.1:$inspectorPort"
 Write-AppLog ("Inspector port: " + $inspectorPort)
 Write-AppLog ("CDP args: " + $argumentLine)
-
-try {
-  if ($codex.AppUserModelId) {
-    Write-AppLog ("Activating packaged app " + $codex.AppUserModelId)
-    Ensure-PackagedActivationType
-    $processId = [CodexPlusPro.PackagedActivation]::Activate($codex.AppUserModelId, $argumentLine)
-    Write-AppLog ("Packaged activation process id " + $processId)
-  } else {
-    $argumentList = @(
-      ("--remote-debugging-port=" + $rendererPort),
-      ("--remote-allow-origins=http://127.0.0.1:" + $rendererPort),
-      ("--inspect=127.0.0.1:" + $inspectorPort)
-    )
-    $appProcess = Start-Process -FilePath $codex.Path -ArgumentList $argumentList -PassThru -WindowStyle Normal
-    Write-AppLog ("Started process PID " + $appProcess.Id)
-  }
-} catch {
-  Show-ErrorDialog ("Failed to start official Codex: " + $_.Exception.Message)
-  Write-AppLog ("Launch failed: " + $_.Exception.ToString())
-  exit 1
-}
-
-if (-not (Wait-ForDevTools -Port $rendererPort -TimeoutSeconds 45)) {
-  Show-ErrorDialog "DevTools port not ready. Official app may reject remote-debugging flags. See log."
-  Write-AppLog ("DevTools not ready on port " + $rendererPort)
-  exit 1
-}
-Write-AppLog "DevTools is ready"
-Write-AppLog "DevTools is responding on /json/version. Proceeding to stabilization sampling..."
-
-# Best-effort target listing (non-fatal)
-try {
-  $targetsJson = Invoke-WebRequest -Uri ("http://127.0.0.1:" + $rendererPort + "/json/list") -UseBasicParsing -TimeoutSec 2
-  if ($targetsJson.Content) {
-    $targets = $targetsJson.Content | ConvertFrom-Json -ErrorAction SilentlyContinue
-    $pageCount = @($targets | Where-Object { $_.type -in @('page','webview') }).Count
-    $devtoolsCount = @($targets | Where-Object { $_.url -like 'devtools://*' }).Count
-    Write-AppLog ("Initial targets: page/webview=" + $pageCount + ", devtools=" + $devtoolsCount)
-  }
-} catch {
-  Write-AppLog ("Could not enumerate targets for diagnostics: " + $_.Exception.Message)
-}
-
-# Short stabilization; injector has its own retry loop for page targets
-$stableSeconds = 0
-for ($i = 0; $i -lt 5; $i++) {
-  Start-Sleep -Milliseconds 600
-  try {
-    $null = Invoke-WebRequest -Uri ("http://127.0.0.1:" + $rendererPort + "/json/version") -UseBasicParsing -TimeoutSec 1
-    $stableSeconds++
-  } catch {
-    Write-AppLog ("DevTools blip during pre-inject wait at t=" + $i)
-  }
-}
-Write-AppLog ("Pre-inject DevTools ready samples: " + $stableSeconds)
-if ($stableSeconds -lt 1) {
-  Start-Sleep -Seconds 2
-  try {
-    $null = Invoke-WebRequest -Uri ("http://127.0.0.1:" + $rendererPort + "/json/version") -UseBasicParsing -TimeoutSec 2
-    $stableSeconds = 1
-    Write-AppLog "DevTools recovered after extra wait"
-  } catch {
-    Show-ErrorDialog "Codex exited too quickly with debug flags. Launch path still unstable."
-    Write-AppLog "Aborting inject due to unstable DevTools"
-    exit 1
-  }
-}
 
 $stdoutLog = Join-Path $LogDir "injector-stdout.log"
 $stderrLog = Join-Path $LogDir "injector-stderr.log"
@@ -447,50 +356,79 @@ Add-InjectorArg -Arguments $injectorArgsList -Name "--managed-latest-kind" -Valu
 Add-InjectorArg -Arguments $injectorArgsList -Name "--managed-latest-path-b64" -Value $managedLatestPathEncoded
 Add-InjectorArg -Arguments $injectorArgsList -Name "--managed-versions-json-b64" -Value $managedVersionsEncoded
 Add-InjectorArg -Arguments $injectorArgsList -Name "--scan-time-utc" -Value $scanTimeUtc
-Add-InjectorArg -Arguments $injectorArgsList -Name "--taskboard-enabled" -Value ($(if ($taskboardEnabled) { "true" } else { "false" }))
-if ($taskboardEnabled) {
-  Add-InjectorArg -Arguments $injectorArgsList -Name "--taskboard-url" -Value $taskboardStatus.EmbedUrl
-  Add-InjectorArg -Arguments $injectorArgsList -Name "--taskboard-launch-instance" -Value $taskboardStatus.InstanceToken
-}
+$startupReadyFile = Join-Path $StateRoot "startup-injector-ready.txt"
+if (Test-Path -LiteralPath $startupReadyFile) { Remove-Item -LiteralPath $startupReadyFile -Force }
+Add-InjectorArg -Arguments $injectorArgsList -Name "--ready-file" -Value $startupReadyFile
 $injectorArgs = $injectorArgsList.ToArray()
 Write-AppLog ("Starting injector with " + $injectorArgs.Count + " arguments")
-$previousTaskboardTokenExists = Test-Path env:CODEX_TASKBOARD_INSTANCE_TOKEN
-$previousTaskboardSecretExists = Test-Path env:CODEX_TASKBOARD_INSTANCE_SECRET
-$previousTaskboardToken = $env:CODEX_TASKBOARD_INSTANCE_TOKEN
-$previousTaskboardSecret = $env:CODEX_TASKBOARD_INSTANCE_SECRET
 try {
-  if ($taskboardEnabled) {
-    $env:CODEX_TASKBOARD_INSTANCE_TOKEN = $taskboardStatus.InstanceToken
-    $env:CODEX_TASKBOARD_INSTANCE_SECRET = $taskboardStatus.InstanceSecret
-  } else {
-    Remove-Item env:CODEX_TASKBOARD_INSTANCE_TOKEN -ErrorAction SilentlyContinue
-    Remove-Item env:CODEX_TASKBOARD_INSTANCE_SECRET -ErrorAction SilentlyContinue
-  }
   $injectorProcess = Start-Process -FilePath $nodePath -ArgumentList $injectorArgs -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
 } catch {
   Write-AppLog ("Injector start failed: " + $_.Exception.ToString())
   Show-ErrorDialog ("Failed to start Codex Plus Pro injector: " + $_.Exception.Message)
   exit 1
-} finally {
-  if ($previousTaskboardTokenExists) {
-    $env:CODEX_TASKBOARD_INSTANCE_TOKEN = $previousTaskboardToken
-  } else {
-    Remove-Item env:CODEX_TASKBOARD_INSTANCE_TOKEN -ErrorAction SilentlyContinue
-  }
-  if ($previousTaskboardSecretExists) {
-    $env:CODEX_TASKBOARD_INSTANCE_SECRET = $previousTaskboardSecret
-  } else {
-    Remove-Item env:CODEX_TASKBOARD_INSTANCE_SECRET -ErrorAction SilentlyContinue
-  }
 }
 Set-Content -Path $PidFile -Value ([string]$injectorProcess.Id) -Encoding ASCII
 Set-Content -Path $PortFile -Value ([string]$rendererPort) -Encoding ASCII
 Write-AppLog ("Injector PID " + $injectorProcess.Id)
+$startupPreparationDeadline = [DateTime]::UtcNow.AddSeconds(20)
+while (-not (Test-Path -LiteralPath $startupReadyFile)) {
+  if ($injectorProcess.HasExited -or [DateTime]::UtcNow -ge $startupPreparationDeadline) {
+    Show-ErrorDialog "Startup theme preparation failed. See injector log."
+    exit 1
+  }
+  Start-Sleep -Milliseconds 30
+}
+Write-AppLog "Startup theme prepared before official app activation"
+
+try {
+  if ($codex.AppUserModelId) {
+    Write-AppLog ("Activating packaged app " + $codex.AppUserModelId)
+    Ensure-PackagedActivationType
+    $processId = [CodexPlusPro.PackagedActivation]::Activate($codex.AppUserModelId, $argumentLine)
+    Write-AppLog ("Packaged activation process id " + $processId)
+  } else {
+    $argumentList = @(
+      ("--remote-debugging-port=" + $rendererPort),
+      ("--remote-allow-origins=http://127.0.0.1:" + $rendererPort),
+      ("--inspect=127.0.0.1:" + $inspectorPort)
+    )
+    $appStart = Start-CodexPlusOfficialProcess -Path $codex.Path -ArgumentLine ($argumentList -join " ")
+    if ($appStart.CliPath) {
+      Write-AppLog ("Using bundled portable CLI: " + $appStart.CliPath)
+    }
+    Write-AppLog ("Started process PID " + $appStart.Process.Id + " from " + $appStart.WorkingDirectory)
+  }
+} catch {
+  Show-ErrorDialog ("Failed to start official Codex: " + $_.Exception.Message)
+  Write-AppLog ("Launch failed: " + $_.Exception.ToString())
+  exit 1
+}
+
+if (-not (Wait-ForDevTools -Port $rendererPort -TimeoutSeconds 45)) {
+  Show-ErrorDialog "DevTools port not ready. Official app may reject remote-debugging flags. See log."
+  Write-AppLog ("DevTools not ready on port " + $rendererPort)
+  exit 1
+}
+Write-AppLog "DevTools is ready"
+Write-AppLog "DevTools is responding; startup injection is already prepared."
+
+# Best-effort target listing (non-fatal)
+try {
+  $targetsJson = Invoke-WebRequest -Uri ("http://127.0.0.1:" + $rendererPort + "/json/list") -UseBasicParsing -TimeoutSec 2
+  if ($targetsJson.Content) {
+    $targets = $targetsJson.Content | ConvertFrom-Json -ErrorAction SilentlyContinue
+    $pageCount = @($targets | Where-Object { $_.type -in @('page','webview') }).Count
+    $devtoolsCount = @($targets | Where-Object { $_.url -like 'devtools://*' }).Count
+    Write-AppLog ("Initial targets: page/webview=" + $pageCount + ", devtools=" + $devtoolsCount)
+  }
+} catch {
+  Write-AppLog ("Could not enumerate targets for diagnostics: " + $_.Exception.Message)
+}
+
 Write-AppLog "Launch complete. Theme injection is running."
 Write-AppLog "=== Scope B2 active: theme + model picker + pet ==="
 Write-AppLog ("Injector ports: renderer=" + $rendererPort + " main-inspect=" + $inspectorPort)
 Write-AppLog "Next: open Codex window. Settings near Search: theme / model bar / pet."
 Write-AppLog "PiP: hover saved threads. Pet: Codex avatar-overlay window + settings toggle."
 exit 0
-
-

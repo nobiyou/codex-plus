@@ -6,12 +6,11 @@ $ErrorActionPreference = "Stop"
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptRoot
 $SourceDir = Join-Path $ScriptRoot "source"
-$TaskboardSource = Join-Path $ScriptRoot "taskbord"
 $VersionFile = Join-Path $SourceDir "VERSION"
-$Version = "1.8.7"
+$Version = "1.8.8"
 if (Test-Path $VersionFile) {
   $Version = (Get-Content -Path $VersionFile -Raw -ErrorAction SilentlyContinue).Trim()
-  if (-not $Version) { $Version = "1.8.7" }
+  if (-not $Version) { $Version = "1.8.8" }
 }
 
 $DistRoot = Join-Path $RepoRoot "dist"
@@ -31,7 +30,6 @@ $required = @(
   (Join-Path $ScriptRoot "launch.ps1"),
   (Join-Path $ScriptRoot "restore.ps1"),
   (Join-Path $ScriptRoot "diagnose.ps1"),
-  (Join-Path $ScriptRoot "taskboard-runtime.psm1"),
   (Join-Path $ScriptRoot "official-codex.psm1"),
   (Join-Path $ScriptRoot "check-official-version.ps1"),
   (Join-Path $ScriptRoot "cleanup-official-version.ps1"),
@@ -47,6 +45,7 @@ $required = @(
   (Join-Path $ScriptRoot "restore.cmd"),
   (Join-Path $ScriptRoot "README.md"),
   (Join-Path $SourceDir "injector.mjs"),
+  (Join-Path $SourceDir "startup-splash.mjs"),
   (Join-Path $SourceDir "theme.css"),
   (Join-Path $SourceDir "theme-packs.json"),
   (Join-Path $SourceDir "VERSION")
@@ -54,22 +53,6 @@ $required = @(
 foreach ($path in $required) {
   if (-not (Test-Path -LiteralPath $path)) {
     throw ("Missing required file: " + $path)
-  }
-}
-
-$taskboardRequired = @(
-  (Join-Path $TaskboardSource "server\index.mjs"),
-  (Join-Path $TaskboardSource "server\app.mjs"),
-  (Join-Path $TaskboardSource "shared"),
-  (Join-Path $TaskboardSource "cli\taskctl.mjs"),
-  (Join-Path $TaskboardSource "scripts\codex-rate-limits.mjs"),
-  (Join-Path $TaskboardSource "dist\web\index.html"),
-  (Join-Path $TaskboardSource "skills\manage-taskboard\SKILL.md"),
-  (Join-Path $TaskboardSource "package.json")
-)
-foreach ($path in $taskboardRequired) {
-  if (-not (Test-Path -LiteralPath $path)) {
-    throw ("Missing Taskboard runtime file: " + $path)
   }
 }
 
@@ -95,7 +78,6 @@ $copyItems = @(
   "launch.ps1",
   "restore.ps1",
   "diagnose.ps1",
-  "taskboard-runtime.psm1",
   "official-codex.psm1",
   "check-official-version.ps1",
   "cleanup-official-version.ps1",
@@ -125,32 +107,6 @@ if (Test-Path -LiteralPath $templatesFrom) {
 # source/ (code + assets + packs)
 $stageSource = Join-Path $StageDir "source"
 Copy-Item -LiteralPath $SourceDir -Destination $stageSource -Recurse -Force
-
-# Include the standalone Taskboard runtime without its development-only
-# node_modules, source tree, tests, or repository metadata.
-$stageTaskboard = Join-Path $StageDir "taskbord"
-New-Item -ItemType Directory -Force -Path $stageTaskboard | Out-Null
-foreach ($relativePath in @(
-  "server",
-  "shared",
-  "cli",
-  "scripts\codex-rate-limits.mjs",
-  "dist\web",
-  "skills\manage-taskboard",
-  "package.json"
-)) {
-  $from = Join-Path $TaskboardSource $relativePath
-  $to = Join-Path $stageTaskboard $relativePath
-  if ((Get-Item -LiteralPath $from).PSIsContainer) {
-    $toParent = Split-Path -Parent $to
-    New-Item -ItemType Directory -Force -Path $toParent | Out-Null
-    Copy-Item -LiteralPath $from -Destination $to -Recurse -Force
-  } else {
-    $toParent = Split-Path -Parent $to
-    New-Item -ItemType Directory -Force -Path $toParent | Out-Null
-    Copy-Item -LiteralPath $from -Destination $to -Force
-  }
-}
 
 # Include quick verification checklist at package root
 $quickTest = Join-Path $RepoRoot "QUICKTEST.md"

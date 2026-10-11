@@ -364,6 +364,72 @@ function Resolve-CodexPlusLegacyLocalCurrent {
   return (New-CodexPlusAppObject -Path $entrypoint.Path -Version "local-current" -Source "LegacyLocalCurrent" -PackageFamilyName $null -AppUserModelId $null -AppKind $entrypoint.AppKind)
 }
 
+function Get-CodexPlusBundledCli {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)][string]$ApplicationPath
+  )
+
+  $applicationDirectory = Split-Path -Parent ([System.IO.Path]::GetFullPath($ApplicationPath))
+  foreach ($relativePath in @("resources\codex.exe", "resources\bin\codex.exe")) {
+    $candidate = Join-Path $applicationDirectory $relativePath
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+      return $candidate
+    }
+  }
+  return $null
+}
+
+function Start-CodexPlusOfficialProcess {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [string]$ArgumentLine = ""
+  )
+
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    throw "Codex executable was not found: $Path"
+  }
+
+  $applicationPath = (Get-Item -LiteralPath $Path -ErrorAction Stop).FullName
+  $workingDirectory = Split-Path -Parent $applicationPath
+  $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+  $startInfo.FileName = $applicationPath
+  $startInfo.WorkingDirectory = $workingDirectory
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  if (-not [string]::IsNullOrWhiteSpace($ArgumentLine)) {
+    $startInfo.Arguments = $ArgumentLine
+  }
+
+  # 26.915.31029 probes the packaged core before the UI starts. A portable
+  # payload must use its own CLI instead of querying Windows package identity.
+  $explicitCli = ""
+  $cliKeys = @($startInfo.EnvironmentVariables.Keys | Where-Object { $_ -eq "CODEX_CLI_PATH" })
+  if ($cliKeys.Count -gt 0) {
+    $explicitCli = [string]$startInfo.EnvironmentVariables["CODEX_CLI_PATH"]
+  }
+  $bundledCli = $null
+  if ([string]::IsNullOrWhiteSpace($explicitCli)) {
+    $bundledCli = Get-CodexPlusBundledCli -ApplicationPath $applicationPath
+    if ($bundledCli) {
+      $startInfo.EnvironmentVariables["CODEX_CLI_PATH"] = $bundledCli
+    }
+  }
+  [void]$startInfo.EnvironmentVariables.Remove("CODEX_WINDOWS_REGISTERED_CORE")
+
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  if (-not $process) {
+    throw "Windows did not return a process for Codex: $applicationPath"
+  }
+
+  return [pscustomobject]@{
+    Process = $process
+    CliPath = $bundledCli
+    WorkingDirectory = $workingDirectory
+  }
+}
+
 function Get-CodexPlusStoreLatestVersion {
   [CmdletBinding()]
   param(
@@ -437,6 +503,7 @@ Export-ModuleMember -Function @(
   "Remove-CodexPlusOldManagedVersions",
   "Resolve-CodexPlusManagedVersion",
   "Resolve-CodexPlusOfficialApp",
+  "Start-CodexPlusOfficialProcess",
   "Compare-CodexPlusVersion",
   "Test-CodexPlusPathInsideRoot"
 )

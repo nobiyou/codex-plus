@@ -14,8 +14,6 @@ $LogFile = Join-Path $LogDir "Codex-Plus-Pro.log"
 $PidFile = Join-Path $StateRoot "injector.pid"
 $PortFile = Join-Path $StateRoot "renderer-port.txt"
 $ResolverPath = Join-Path $PSScriptRoot "official-codex.psm1"
-$TaskboardRuntimePath = Join-Path $PSScriptRoot "taskboard-runtime.psm1"
-$TaskboardStateRoot = Join-Path $StateRoot "taskboard"
 
 $null = New-Item -ItemType Directory -Force -Path $LogDir
 
@@ -45,20 +43,8 @@ if (Test-Path $versionFile) {
 Write-AppLog ("Version: " + $version + " | Stopping injection and launching clean official app")
 if (-not (Test-Path $ResolverPath)) { Show-ErrorDialog "Missing official-codex.psm1"; exit 1 }
 Import-Module $ResolverPath -Force
-if (-not (Test-Path $TaskboardRuntimePath)) { Show-ErrorDialog "Missing taskboard-runtime.psm1"; exit 1 }
-Import-Module $TaskboardRuntimePath -Force
 
 Write-AppLog "Restore original Codex launch"
-
-try {
-  $taskboardStop = Stop-CodexPlusTaskboard -StateRoot $TaskboardStateRoot
-  Write-AppLog ("Taskboard restore: " + $taskboardStop.Reason)
-  if ($taskboardStop.StatePreserved) {
-    Write-AppLog "WARNING: Taskboard state was preserved because process ownership could not be proven."
-  }
-} catch {
-  Write-AppLog ("Taskboard stop failed; continuing clean restore: " + $_.Exception.Message)
-}
 
 if (Test-Path $PidFile) {
   $oldPidText = (Get-Content -Path $PidFile -Raw -ErrorAction SilentlyContinue)
@@ -103,7 +89,10 @@ if ($codex.AppUserModelId) {
 }
 
 Write-AppLog ("Starting " + $codex.Path + " without debug flags (" + $codex.Source + " " + $codex.Version + " " + $codex.AppKind + ")")
-Start-Process -FilePath $codex.Path
+$appStart = Start-CodexPlusOfficialProcess -Path $codex.Path
+if ($appStart.CliPath) {
+  Write-AppLog ("Using bundled portable CLI: " + $appStart.CliPath)
+}
 Write-AppLog "Restore complete"
 exit 0
 

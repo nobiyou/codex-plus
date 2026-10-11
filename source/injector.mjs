@@ -2,28 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import {
-  buildTaskboardAutomationName,
-  taskboardAutomationActivityKey,
-  normalizeAutomationGate,
-  parseTaskboardAutomationHostRequest,
-  reconcileTaskboardAutomation,
-  taskboardAutomationBoardState,
-  taskboardAutomationGateDecision,
-  taskboardAutomationPolicyOperation,
-} from "../taskbord/shared/taskboard-automation.mjs";
-import { readLatestAutomationRunFailure } from "../taskbord/shared/codex-automation-runs.mjs";
-import { readCodexQuotaStatus } from "../taskbord/scripts/codex-rate-limits.mjs";
+import { buildStartupSource } from "./startup-splash.mjs";
 
 // =============================================================================
 // Codex Plus Pro — Windows Scope B2 (Theme + Model picker + Pet; PiP retired)
 // -----------------------------------------------------------------------------
-// Theme, accent, wallpaper/logo, flat model picker, and desktop pet.
+// Theme, accent, wallpaper/logo, themed model picker, and desktop pet.
 // Picture-in-picture / multi-window Popout control is retired (delete-first).
 // Main controller (--main-port) remains for pet window hide/show only.
-// SETTINGS_SECTIONS: theme + modelPicker + pet + taskboard service.
 // "恢复默认" clears custom wallpaper/logo and reapplies defaults.
 // =============================================================================
 
@@ -47,7 +34,7 @@ let hostFeatureSettings = {
   petMotion: "full",
   modelDensity: "compact",
 };
-const WINDOWS_SCOPE_A_VERSION = "1.8.7";
+const WINDOWS_SCOPE_A_VERSION = "1.8.8";
 const scriptVersion = WINDOWS_SCOPE_A_VERSION + " (Scope B2 pet - Windows)";
 const hostVersionInfo = normalizeVersionInfo({
   plusVersion: options["plus-version"] ?? WINDOWS_SCOPE_A_VERSION,
@@ -79,89 +66,16 @@ const logoPath = path.resolve(options.logo ?? path.join(scriptDirectory, "assets
 const petNotificationsPath = path.resolve(
   options["pet-notifications"] ?? path.join(scriptDirectory, "pet-notifications.js"),
 );
-const taskboardEmbedPath = path.resolve(
-  options["taskboard-embed"] ?? path.join(scriptDirectory, "taskboard-embed.js"),
-);
-let taskboardUrl = resolveTaskboardUrl(
-  options["taskboard-url"] ?? process.env.CODEX_TASKBOARD_URL ?? "",
-);
-const taskboardEnabled = options["disable-taskboard"] !== true
-  && String(options["taskboard-enabled"] ?? "true").toLowerCase() !== "false";
-let taskboardLaunchInstanceId = String(
-  options["taskboard-launch-instance"]
-    ?? process.env.CODEX_TASKBOARD_LAUNCH_INSTANCE
-    ?? "codex-plus-pro",
-).trim() || "codex-plus-pro";
-const taskboardHostBinding = "__codexTaskboardHostV1";
-const taskboardHostRequestMessage = "__codexTaskboardHostRequestV1";
-const taskboardHostResponseMessage = "__codexTaskboardHostResponseV1";
-const taskboardHostHeartbeatMessage = "__codexTaskboardHostHeartbeatV1";
-const taskboardHostCapability = randomUUID();
-let taskboardInstanceSecret = String(
-  options["taskboard-instance-secret"]
-    ?? process.env.CODEX_TASKBOARD_INSTANCE_SECRET
-    ?? "",
-).trim();
-const taskboardStateDirectory = path.resolve(
-  options["taskboard-state-dir"]
-    ?? process.env.CODEX_TASKBOARD_STATE_DIR
-    ?? path.join(
-      process.env.LOCALAPPDATA
-        ?? path.join(process.env.USERPROFILE ?? process.cwd(), "AppData", "Local"),
-      "Codex-Plus-Pro",
-      "taskboard",
-    ),
-);
-const taskboardRuntimeFile = path.resolve(
-  process.env.CODEX_TASKBOARD_RUNTIME_FILE
-    ?? path.join(taskboardStateDirectory, "launcher-runtime.json"),
-);
-if (!process.env.CODEX_TASKBOARD_RUNTIME_FILE) {
-  process.env.CODEX_TASKBOARD_RUNTIME_FILE = taskboardRuntimeFile;
-}
-const taskboardRuntimePath = path.resolve(scriptDirectory, "..", "taskboard-runtime.psm1");
-const taskboardAutomationPoliciesPath = path.join(
-  taskboardStateDirectory,
-  "codex-automation-policies.json",
-);
-const codexHomePath = path.resolve(
-  process.env.CODEX_HOME
-    ?? path.join(process.env.USERPROFILE ?? process.cwd(), ".codex"),
-);
-let taskboardRuntimeSource = buildTaskboardRuntimeSource({
-  enabled: taskboardEnabled,
-  url: taskboardUrl,
-  launchInstanceId: taskboardLaunchInstanceId,
-  hostCapability: taskboardHostCapability,
-});
 const oneShot = options.once === true;
-const taskboardAutomationMethods = new Set([
-  "list-automations",
-  "automation-create",
-  "automation-update",
-]);
-let taskboardAutomationRequestSequence = 0;
-const taskboardAutomationPolicyTimers = new Map();
-const taskboardAutomationPolicyRecords = new Map();
-const taskboardAutomationPolicyQueues = new Map();
-const taskboardAutomationSessions = new Set();
-const taskboardAutomationRestoredSessions = new WeakSet();
-const taskboardAutomationRestorePromises = new WeakMap();
-let taskboardAutomationPoliciesLoadPromise = null;
-let taskboardAutomationPoliciesWritePromise = Promise.resolve();
-let taskboardAutomationRestoreRetryTimer = null;
-let taskboardServiceOperationPromise = null;
-
 // Tiny placeholders keep the first evaluate under control. Full assets are applied afterwards.
 const TINY_JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wAAAAgJCgsKCA0LCwsNDg0PEhQRDxISEhYVFxkWGSYeIyAhICUhJSwtKjApKy84MiM6OEk5QE5NTk9GXl5hXFtcRcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcP/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGcP//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z";
 const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 const cssTemplate = await fs.readFile(cssPath, "utf8");
-const [artworkDataUri, logoDataUri, petNotificationsSource, taskboardEmbedSource] = await Promise.all([
+const [artworkDataUri, logoDataUri, petNotificationsSource] = await Promise.all([
   loadCompressedDataUri(artworkPath, "wallpaper"),
   loadCompressedDataUri(logoPath, "logo"),
   fs.readFile(petNotificationsPath, "utf8"),
-  fs.readFile(taskboardEmbedPath, "utf8"),
 ]);
 // Accent-linked packs (default mode only). Optional theme-packs.json can override paths.
 // Primary: windows/source/theme-packs.json (preferred).
@@ -176,6 +90,10 @@ const accentAssetPacks = await buildAccentAssetPacks({
 const themeCss = cssTemplate
   .replaceAll("__WALLPAPER_DATA_URI__", artworkDataUri)
   .replaceAll("__POKEBALL_LOGO_DATA_URI__", logoDataUri);
+const startupSource = buildStartupSource({
+  css: cssTemplate,
+  assetSource: buildThemeAssetSource(artworkDataUri, logoDataUri, accentAssetPacks),
+});
 const packKeys = Object.keys(accentAssetPacks);
 log(`Assets ready wallpaper=${Math.round(artworkDataUri.length / 1024)}KB logo=${Math.round(logoDataUri.length / 1024)}KB packs=[${packKeys.join(",")}]`);
 
@@ -188,13 +106,10 @@ if (options.check === true) {
   new Function(
     buildInjectionSource("/* check */")
       + "\n;\n"
-      + taskboardRuntimeSource
-      + "\n;\n"
-      + petNotificationsSource
-      + "\n;\n"
-      + taskboardEmbedSource,
+      + petNotificationsSource,
   );
   new Function(mainControllerSource);
+  new Function(startupSource);
   log("Windows theme injection + pet notifications + pet window controller syntax are valid");
   process.exit(0);
 }
@@ -205,13 +120,17 @@ const pageSessions = new Map();
 const pageTargetsBySessionId = new Map();
 let browserConnection = null;
 let mainConnection = null;
+let rendererPetState = null;
+let rendererPetSync = Promise.resolve();
 let officialUpgradePromise = null;
 let versionCheckPromise = null;
 let managedVersionCleanupPromise = null;
 let mainAttaching = false;
 let shuttingDown = false;
 let missingServerTicks = 0;
+let missingServerSince = null;
 let injectedCount = 0;
+if (options["ready-file"]) await fs.writeFile(path.resolve(options["ready-file"]), "prepared", "utf8");
 process.on("SIGINT", () => { shuttingDown = true; });
 process.on("SIGTERM", () => { shuttingDown = true; });
 log(`Codex Plus Pro Windows injector starting on 127.0.0.1:${rendererPort}`);
@@ -222,22 +141,17 @@ while (!shuttingDown) {
     if (!browserConnection) {
       browserConnection = await connectToBrowser(rendererPort);
       missingServerTicks = 0;
+      missingServerSince = null;
     }
     const targetInfos = await browserConnection.send("Target.getTargets");
     const pageTargets = (targetInfos.targetInfos || []).filter(isInjectableTarget);
     for (const target of pageTargets) {
+      const existing = pageSessions.get(target.targetId);
+      if (existing) Object.assign(existing.target, target);
       if (attachedTargetIds.has(target.targetId) || attachingTargetIds.has(target.targetId)) continue;
-      attachingTargetIds.add(target.targetId);
-      attachToPageTarget(browserConnection, target)
-      .then((sessionId) => {
-        if (pageSessions.get(target.targetId)?.sessionId !== sessionId) return;
-        attachedTargetIds.add(target.targetId);
-        injectedCount += 1;
-      })
-        .catch((error) => { log(`Target ${String(target.targetId).slice(0, 8)} attach failed: ${error.message}`); })
-        .finally(() => { attachingTargetIds.delete(target.targetId); });
+      queuePageAttachment(browserConnection, target);
     }
-    const liveIds = new Set(pageTargets.map((target) => target.targetId));
+    const liveIds = new Set((targetInfos.targetInfos || []).map((target) => target.targetId));
     for (const targetId of [...attachedTargetIds]) {
       if (!liveIds.has(targetId)) {
         invalidatePageSession(targetId, null, "Target.removed");
@@ -267,12 +181,13 @@ while (!shuttingDown) {
     }
     if (missingServerTicks === 0) log(`Waiting for Codex DevTools: ${error.message}`);
     missingServerTicks += 1;
-    if (missingServerTicks >= 40) {
+    missingServerSince ??= Date.now();
+    if (Date.now() - missingServerSince >= 45000) {
       log("Codex is no longer reachable; injector exiting.");
       break;
     }
   }
-  await delay(900);
+  await delay(browserConnection ? 900 : 15);
 }
 try { browserConnection?.close(); } catch {}
 try { mainConnection?.close(); } catch {}
@@ -285,7 +200,6 @@ function isInjectableTarget(target) {
   const url = String(target.url || "");
   const title = String(target.title || "");
   if (url.startsWith("devtools://") || url.startsWith("chrome-extension://") || url.startsWith("chrome://")) return false;
-  if (isTaskboardTargetUrl(url)) return false;
   if (url.startsWith("app://")) return true;
   if (title === "Codex" || title === "ChatGPT") return true;
   if (url.includes("chatgpt.com") || url.includes("openai.com")) return true;
@@ -293,12 +207,14 @@ function isInjectableTarget(target) {
   return title.length > 0;
 }
 
-function isTaskboardTargetUrl(value) {
-  if (!taskboardUrl || !value) return false;
+function isFeatureSettingsOwnerTarget(target) {
+  const type = String(target?.type || "");
+  if (type !== "page" && type !== "webview") return false;
   try {
-    const candidate = new URL(value);
-    const configured = taskboardUrl instanceof URL ? taskboardUrl : new URL(String(taskboardUrl));
-    return candidate.origin === configured.origin;
+    const parsed = new URL(String(target?.url || ""));
+    return parsed.protocol === "app:"
+      && parsed.pathname === "/index.html"
+      && !parsed.searchParams.has("initialRoute");
   } catch {
     return false;
   }
@@ -315,9 +231,38 @@ async function connectToBrowser(port) {
     const targetId = params?.targetId || pageTargetsBySessionId.get(params?.sessionId);
     invalidatePageSession(targetId, params?.sessionId, "Target.detachedFromTarget");
   });
+  connection.on("Target.attachedToTarget", (params) => {
+    const target = params.targetInfo;
+    if ((target?.type === "page" || target?.type === "webview") && (isInjectableTarget(target) || !target.url || target.url === "about:blank")) {
+      queuePageAttachment(connection, target, params.sessionId);
+    }
+  });
+  connection.on("Target.targetInfoChanged", ({ targetInfo }) => {
+    const existing = pageSessions.get(targetInfo?.targetId);
+    if (existing) Object.assign(existing.target, targetInfo);
+  });
+  await connection.send("Target.setAutoAttach", {
+    autoAttach: true,
+    waitForDebuggerOnStart: false,
+    flatten: true,
+    filter: [{ type: "page", exclude: false }, { type: "webview", exclude: false }, { exclude: true }],
+  });
   await connection.send("Target.setDiscoverTargets", { discover: true });
   log("Browser DevTools connected");
   return connection;
+}
+
+function queuePageAttachment(browser, target, sessionId = null) {
+  if (attachedTargetIds.has(target.targetId) || attachingTargetIds.has(target.targetId)) return;
+  attachingTargetIds.add(target.targetId);
+  attachToPageTarget(browser, target, sessionId)
+    .then((activeSessionId) => {
+      if (pageSessions.get(target.targetId)?.sessionId !== activeSessionId) return;
+      attachedTargetIds.add(target.targetId);
+      injectedCount += 1;
+    })
+    .catch((error) => log(`Target ${String(target.targetId).slice(0, 8)} attach failed: ${error.message}`))
+    .finally(() => attachingTargetIds.delete(target.targetId));
 }
 
 async function postOfficialUpgradeResult(send, payload) {
@@ -671,14 +616,13 @@ function stripOfficialProgressOutput(text) {
     .trim();
 }
 
-async function attachToPageTarget(browser, target) {
-  const attached = await browser.send("Target.attachToTarget", {
+async function attachToPageTarget(browser, target, autoAttachedSessionId = null) {
+  const attached = autoAttachedSessionId ? { sessionId: autoAttachedSessionId } : await browser.send("Target.attachToTarget", {
     targetId: target.targetId,
     flatten: true,
   });
   const sessionId = attached.sessionId;
   if (!sessionId) throw new Error("Missing session id");
-  let taskboardHostBridge = null;
   const send = (method, params = {}) => browser.send(method, params, sessionId).catch((error) => {
     if (/Session with given id not found/i.test(String(error?.message || ""))) {
       invalidatePageSession(target.targetId, sessionId, "session-not-found");
@@ -688,27 +632,25 @@ async function attachToPageTarget(browser, target) {
   pageSessions.set(target.targetId, {
     sessionId,
     send,
-    dispose: () => taskboardHostBridge?.dispose(),
+    target: target,
   });
   pageTargetsBySessionId.set(sessionId, target.targetId);
 
-  await send("Runtime.enable");
-  await send("Page.enable");
-  taskboardHostBridge = createTaskboardHostBridge(send);
-
   const pageSource = buildInjectionSource("/* css applied via host chunks */")
     + "\n;\n"
-    + taskboardRuntimeSource
-    + "\n;\n"
-    + petNotificationsSource
-    + "\n;\n"
-    + taskboardEmbedSource;
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: pageSource });
+    + petNotificationsSource;
+  // Install first, before requesting runtime events or waiting for DOM readiness.
+  // runImmediately also covers a navigation that began before the attachment.
+  await send("Page.addScriptToEvaluateOnNewDocument", {
+    source: startupSource + "\n;\n" + pageSource,
+    runImmediately: true,
+  });
+  await send("Runtime.enable");
+  await send("Page.enable");
 
   const refreshPageTheme = async (reason) => {
     await applyCssInChunks(send, themeCss);
     await applyThemeAssets(send, artworkDataUri, logoDataUri, accentAssetPacks);
-    await taskboardHostBridge.install();
     const result = await send("Runtime.evaluate", {
       expression: pageSource,
       awaitPromise: true,
@@ -727,7 +669,6 @@ async function attachToPageTarget(browser, target) {
   let navigationRefreshTimer = null;
   browser.on("Page.loadEventFired", (_params, message) => {
     if (message?.sessionId && message.sessionId !== sessionId) return;
-    taskboardHostBridge.reset();
     if (navigationRefreshTimer) clearTimeout(navigationRefreshTimer);
     navigationRefreshTimer = setTimeout(() => {
       navigationRefreshTimer = null;
@@ -740,6 +681,7 @@ async function attachToPageTarget(browser, target) {
   browser.on("Runtime.bindingCalled", async (params, message) => {
     if (message?.sessionId && message.sessionId !== sessionId) return;
     if (params?.name === featureSettingsBinding) {
+      if (!isFeatureSettingsOwnerTarget(target)) return;
       try {
         const payload = JSON.parse(params.payload);
         hostFeatureSettings = normalizeHostFeatureSettings(payload);
@@ -811,17 +753,12 @@ async function attachToPageTarget(browser, target) {
           detail: error.message,
         });
       }
-    } else if (params?.name === taskboardHostBinding) {
-      taskboardHostBridge.handleBinding(params).catch((error) => {
-        log(`Taskboard host bridge request failed: ${error.message}`);
-      });
     }
   });
   await send("Runtime.addBinding", { name: featureSettingsBinding });
   await send("Runtime.addBinding", { name: officialUpgradeBinding });
   await send("Runtime.addBinding", { name: versionCheckBinding });
   await send("Runtime.addBinding", { name: managedVersionCleanupBinding });
-  await taskboardHostBridge.install();
 
   for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
@@ -835,12 +772,6 @@ async function attachToPageTarget(browser, target) {
   }
 
   await refreshPageTheme("initial");
-  await taskboardHostBridge.publishHeartbeat();
-  taskboardHostBridge.restoreAutomations().catch((error) => {
-    if (!shuttingDown) log(`Taskboard automation restore failed: ${error.message}`);
-  });
-  taskboardHostBridge.startHeartbeat();
-
   log(`Theme active in ${target.title || "Codex"} (${String(target.targetId).slice(0, 8)})`);
   return sessionId;
 }
@@ -893,23 +824,77 @@ function normalizeHostFeatureSettings(value) {
 }
 
 async function syncMainFeatureSettings() {
-  if (!mainConnection) return;
-  log("syncMainFeatureSettings pet=" + hostFeatureSettings.pet);
-  const expression = `globalThis.__codexPokedexPetWindowController?.setFeatures(${JSON.stringify({
-    pet: hostFeatureSettings.pet,
-  })})`;
-  const result = await mainConnection.send("Runtime.evaluate", {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  if (result.exceptionDetails) {
-    throw new Error(
-      result.exceptionDetails.exception?.description ??
-      result.exceptionDetails.text ??
-      "Window settings failed",
-    );
+  const nextPet = hostFeatureSettings.pet;
+  log("syncMainFeatureSettings pet=" + nextPet);
+  if (mainConnection) {
+    const expression = `globalThis.__codexPokedexPetWindowController?.setFeatures(${JSON.stringify({
+      pet: nextPet,
+    })})`;
+    try {
+      const result = await mainConnection.send("Runtime.evaluate", {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      if (result.exceptionDetails) {
+        throw new Error(
+          result.exceptionDetails.exception?.description ??
+          result.exceptionDetails.text ??
+          "Window settings failed",
+        );
+      }
+      if (result.result?.value?.pet === nextPet) {
+        rendererPetState = nextPet;
+        return;
+      }
+      log("Codex window controller is not installed; using renderer pet bridge");
+    } catch (error) {
+      log(`Codex window controller sync failed; using renderer pet bridge: ${error.message}`);
+    }
   }
+  rendererPetSync = rendererPetSync.then(async () => {
+    if (mainConnection || rendererPetState === nextPet) return true;
+    const message = { type: nextPet ? "avatar-overlay-open" : "avatar-overlay-close" };
+    const sent = await sendRendererAvatarOverlayMessage(message);
+    if (sent) rendererPetState = nextPet;
+    return sent;
+  });
+  await rendererPetSync;
+}
+
+async function sendRendererAvatarOverlayMessage(message) {
+  const expression = `(() => {
+    const message = ${JSON.stringify(message)};
+    try {
+      if (typeof window.electronBridge?.sendMessageFromView !== "function") return { ok: false };
+      const pending = window.electronBridge.sendMessageFromView(message);
+      pending?.catch?.(() => {});
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  })()`;
+  const sessions = [...pageSessions.values()]
+    .filter((session) => {
+      const url = String(session.target?.url || "");
+      const type = String(session.target?.type || "");
+      return (type === "page" || type === "webview") && url.startsWith("app://");
+    })
+    .sort((left, right) => {
+      const rank = (session) => String(session.target?.url || "").includes("/index.html") ? 0 : 1;
+      return rank(left) - rank(right);
+    });
+  for (const session of sessions) {
+    try {
+      const result = await session.send("Runtime.evaluate", {
+        expression,
+        awaitPromise: false,
+        returnByValue: true,
+      });
+      if (!result.exceptionDetails && result.result?.value?.ok === true) return true;
+    } catch {}
+  }
+  return false;
 }
 
 function createCdpConnection(url, onClose) {
@@ -976,889 +961,10 @@ function createCdpConnection(url, onClose) {
   });
 }
 
-function createTaskboardHostBridge(send) {
-  let activeContextId = null;
-  let installInFlight = null;
-  let heartbeatTimer = null;
-  let cspBypassTimer = null;
-  let cspBypassActive = false;
-  let cspProtocolBypassActive = false;
-  let hostCspMetaState = null;
-  let frameDocumentScriptIdentifier = null;
-  let disposed = false;
-  let automationSenderRegistered = false;
-
-  function clearCspBypassTimer() {
-    if (cspBypassTimer === null) return;
-    clearTimeout(cspBypassTimer);
-    cspBypassTimer = null;
-  }
-
-  async function prepareFrame() {
-    if (disposed) throw new Error("Taskboard host bridge is disposed");
-    if (cspBypassActive) return { prepared: true, reused: true };
-    await send("Page.setBypassCSP", { enabled: true });
-    cspProtocolBypassActive = true;
-    const cspResult = await send("Runtime.evaluate", {
-      expression: `(() => {
-  const meta = document.head?.querySelector('meta[http-equiv="Content-Security-Policy"]');
-  if (!meta) return { found: false };
-  const state = { content: meta.getAttribute("content") || "", httpEquiv: meta.getAttribute("http-equiv") || "Content-Security-Policy" };
-  meta.remove();
-  return { found: true, state };
-})()`,
-      returnByValue: true,
-    });
-    hostCspMetaState = cspResult?.result?.value?.state ?? null;
-    cspBypassActive = true;
-    clearCspBypassTimer();
-    cspBypassTimer = setTimeout(() => {
-      cspBypassTimer = null;
-      releaseFrame().catch((error) => {
-        if (!shuttingDown) log(`Taskboard CSP fallback release failed: ${error.message}`);
-      });
-    }, 30_000);
-    cspBypassTimer.unref?.();
-    return { prepared: true, reused: false };
-  }
-
-  async function releaseFrame() {
-    clearCspBypassTimer();
-    if (disposed) return { released: false };
-    let documentScriptRemoved = false;
-    try {
-      if (frameDocumentScriptIdentifier !== null) {
-        await send("Page.removeScriptToEvaluateOnNewDocument", {
-          identifier: frameDocumentScriptIdentifier,
-        });
-        frameDocumentScriptIdentifier = null;
-        documentScriptRemoved = true;
-      }
-      if (hostCspMetaState) {
-        await send("Runtime.evaluate", {
-          expression: `(() => {
-  const state = ${JSON.stringify(hostCspMetaState)};
-  if (document.head?.querySelector('meta[http-equiv="Content-Security-Policy"]')) return false;
-  const meta = document.createElement("meta");
-  meta.setAttribute("http-equiv", state.httpEquiv);
-  meta.setAttribute("content", state.content);
-  document.head?.appendChild(meta);
-  return true;
-})()`,
-          returnByValue: true,
-        });
-        hostCspMetaState = null;
-      }
-      if (cspProtocolBypassActive) {
-        await send("Page.setBypassCSP", { enabled: false });
-        cspProtocolBypassActive = false;
-      }
-      if (!cspBypassActive) return { released: documentScriptRemoved };
-      cspBypassActive = false;
-      return { released: true, documentScriptRemoved };
-    } catch (error) {
-      if (disposed) return;
-      cspBypassTimer = setTimeout(() => {
-        cspBypassTimer = null;
-        releaseFrame().catch(() => {});
-      }, 1_000);
-      cspBypassTimer.unref?.();
-      throw error;
-    }
-  }
-
-  async function install() {
-    if (disposed) throw new Error("Taskboard host bridge is disposed");
-    if (installInFlight) return installInFlight;
-    if (activeContextId !== null) return activeContextId;
-
-    installInFlight = (async () => {
-      const { frameTree } = await send("Page.getFrameTree");
-      const frameId = frameTree?.frame?.id;
-      if (!frameId) throw new Error("Codex main frame is unavailable for the Taskboard host bridge");
-      const isolatedWorld = await send("Page.createIsolatedWorld", {
-        frameId,
-        worldName: "codex-plus-pro-taskboard-host",
-      });
-      const contextId = isolatedWorld?.executionContextId;
-      if (!Number.isInteger(contextId)) throw new Error("Taskboard host bridge context was not created");
-      await send("Runtime.addBinding", {
-        name: taskboardHostBinding,
-        executionContextId: contextId,
-      });
-      const nativeAutomationAvailable = await send("Runtime.evaluate", {
-        expression: "typeof window.electronBridge?.sendMessageFromView === 'function'",
-        returnByValue: true,
-      });
-      if (nativeAutomationAvailable?.result?.value === true) {
-        registerTaskboardAutomationSender(send);
-        automationSenderRegistered = true;
-      }
-      await send("Runtime.evaluate", {
-        contextId,
-        expression: `(() => {
-  const capability = ${JSON.stringify(taskboardHostCapability)};
-  const bindingName = ${JSON.stringify(taskboardHostBinding)};
-  if (globalThis.__codexPlusProTaskboardBridgeV1 === capability) return;
-  globalThis.__codexPlusProTaskboardBridgeV1 = capability;
-  window.addEventListener("message", (event) => {
-    const message = event.data;
-    if (
-      event.source !== window
-      || event.origin !== window.location.origin
-      || !message
-      || typeof message !== "object"
-      || message.type !== ${JSON.stringify(taskboardHostRequestMessage)}
-      || message.capability !== capability
-    ) return;
-    globalThis[bindingName](JSON.stringify(message.payload));
-  });
-})();`,
-        returnByValue: true,
-      });
-      activeContextId = contextId;
-      return contextId;
-    })();
-
-    try {
-      return await installInFlight;
-    } finally {
-      installInFlight = null;
-    }
-  }
-
-  function reset() {
-    activeContextId = null;
-    releaseFrame().catch((error) => {
-      if (!shuttingDown) log(`Taskboard CSP reset failed: ${error.message}`);
-    });
-  }
-
-  async function publishHeartbeat() {
-    if (disposed) return;
-    const contextId = await install();
-    await send("Runtime.evaluate", {
-      contextId,
-      expression: `window.postMessage({
-  type: ${JSON.stringify(taskboardHostHeartbeatMessage)},
-  capability: ${JSON.stringify(taskboardHostCapability)},
-  at: Date.now(),
-  startupToken: ${JSON.stringify(taskboardLaunchInstanceId)}
-}, window.location.origin)`,
-      returnByValue: true,
-    });
-  }
-
-  function startHeartbeat() {
-    if (disposed) return;
-    if (heartbeatTimer !== null) return;
-    heartbeatTimer = setInterval(() => {
-      publishHeartbeat().catch((error) => {
-        if (!shuttingDown) log(`Taskboard host heartbeat failed: ${error.message}`);
-      });
-    }, 3_000);
-    heartbeatTimer.unref?.();
-  }
-
-  async function handleBinding(params) {
-    if (params?.executionContextId !== activeContextId) return;
-    const parsed = parseTaskboardHostRequest(params.payload);
-    if (!parsed.request) {
-      if (!parsed.id) return;
-      await sendTaskboardHostResponse(send, params.executionContextId, {
-        id: parsed.id,
-        ok: false,
-        error: parsed.error,
-      });
-      return;
-    }
-
-    try {
-      let result;
-      if (parsed.request.action === "ensure") {
-        result = await ensureTaskboardService(send);
-      } else if (parsed.request.action === "prepare-frame") {
-        result = await prepareFrame();
-      } else if (parsed.request.action === "load-frame") {
-        await prepareFrame();
-        const loadedFrame = await loadTaskboardFrameViaCdp(
-          send,
-          parsed.request.frameName,
-          parsed.request.frameCapability,
-          parsed.request.frameChallenge,
-        );
-        frameDocumentScriptIdentifier = null;
-        result = loadedFrame;
-      } else if (parsed.request.action === "release-frame") {
-        result = await releaseFrame();
-      } else if (parsed.request.action === "prefill-task-composer") {
-        result = await prefillTaskComposerViaCdp(
-          send,
-          params.executionContextId,
-          parsed.request,
-        );
-      } else if (parsed.request.action === "open-external") {
-        result = await openTaskboardExternalUrl(parsed.request);
-      } else if (parsed.request.action === "api") {
-        result = await requestTaskboardApiViaHost(send, parsed.request);
-      } else if (parsed.request.action === "automation") {
-        const request = parseTaskboardAutomationHostRequest(parsed.request);
-        if (!request) throw new Error("Taskboard automation request is invalid");
-        result = await handleTaskboardAutomationRequest(send, request);
-      } else if (parsed.request.action === "service") {
-        result = await handleTaskboardServiceRequest(send, parsed.request.operation);
-      } else {
-        throw new Error("Unsupported Taskboard host action");
-      }
-      await sendTaskboardHostResponse(send, params.executionContextId, {
-        id: parsed.request.id,
-        ok: true,
-        ...result,
-      });
-    } catch (error) {
-      await sendTaskboardHostResponse(send, params.executionContextId, {
-        id: parsed.request.id,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  function dispose() {
-    disposed = true;
-    activeContextId = null;
-    installInFlight = null;
-    clearCspBypassTimer();
-    if (heartbeatTimer !== null) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    }
-    frameDocumentScriptIdentifier = null;
-    hostCspMetaState = null;
-    cspBypassActive = false;
-    cspProtocolBypassActive = false;
-    if (automationSenderRegistered) {
-      unregisterTaskboardAutomationSender(send);
-      automationSenderRegistered = false;
-    }
-  }
-
-  return {
-    install,
-    reset,
-    prepareFrame,
-    releaseFrame,
-    publishHeartbeat,
-    startHeartbeat,
-    handleBinding,
-    restoreAutomations: () => automationSenderRegistered
-      ? restoreTaskboardAutomationPolicies(send)
-      : Promise.resolve({ skipped: true }),
-    dispose,
-  };
-}
-
-function registerTaskboardAutomationSender(send) {
-  taskboardAutomationSessions.delete(send);
-  taskboardAutomationSessions.add(send);
-}
-
-function unregisterTaskboardAutomationSender(send) {
-  taskboardAutomationSessions.delete(send);
-}
-
-function currentTaskboardAutomationSender() {
-  const candidates = [...taskboardAutomationSessions].reverse();
-  if (candidates.length === 0) {
-    throw new Error("No live Codex renderer is available for Taskboard automation");
-  }
-  return candidates[0];
-}
-
-function scheduleTaskboardAutomationRestoreRetry(delayMs = 1_000) {
-  if (taskboardAutomationRestoreRetryTimer !== null || shuttingDown) return;
-  taskboardAutomationRestoreRetryTimer = setTimeout(async () => {
-    taskboardAutomationRestoreRetryTimer = null;
-    const sender = [...taskboardAutomationSessions].reverse()[0];
-    if (!sender) return;
-    try {
-      await restoreTaskboardAutomationPolicies(sender, { retryOnTransientFailure: false });
-    } catch (error) {
-      if (!shuttingDown) log(`Taskboard automation restore retry failed: ${error.message}`);
-    }
-  }, delayMs);
-  taskboardAutomationRestoreRetryTimer.unref?.();
-}
-
-function isTransientTaskboardAutomationRestoreError(error) {
-  const message = String(error?.message || error);
-  return /No live Codex renderer|DevTools socket|Session with given id|没有响应|timed out/i.test(message);
-}
-
-async function requestCodexAutomationViaCdp(send, method, params) {
-  if (!taskboardAutomationMethods.has(method)) {
-    throw new Error(`Unsupported Codex automation method: ${method}`);
-  }
-  const requestId = [
-    "taskboard-automation",
-    process.pid,
-    Date.now().toString(36),
-    (++taskboardAutomationRequestSequence).toString(36),
-  ].join("-");
-  const evaluation = await send("Runtime.evaluate", {
-    expression: `(() => new Promise((resolve) => {
-  const method = ${JSON.stringify(method)};
-  const params = ${JSON.stringify(params)};
-  const requestId = ${JSON.stringify(requestId)};
-  const bridge = window.electronBridge;
-  if (!bridge || typeof bridge.sendMessageFromView !== "function") {
-    resolve({ ok: false, error: "当前 Codex 版本没有提供原生自动任务能力" });
-    return;
-  }
-  let settled = false;
-  const finish = (result) => {
-    if (settled) return;
-    settled = true;
-    window.clearTimeout(timeout);
-    window.removeEventListener("message", onMessage);
-    resolve(result);
-  };
-  const onMessage = (event) => {
-    const message = event.data;
-    if (
-      !message
-      || typeof message !== "object"
-      || message.type !== "fetch-response"
-      || message.requestId !== requestId
-    ) return;
-    finish({
-      ok: true,
-      responseType: message.responseType,
-      status: message.status,
-      bodyJsonString: message.bodyJsonString,
-    });
-  };
-  const timeout = window.setTimeout(
-    () => finish({ ok: false, error: "Codex 自动任务接口没有响应" }),
-    10_000,
-  );
-  window.addEventListener("message", onMessage);
-  Promise.resolve(bridge.sendMessageFromView({
-    type: "fetch",
-    requestId,
-    method: "POST",
-    url: \`vscode://codex/\${method}\`,
-    body: JSON.stringify(params),
-  })).catch((error) => {
-    finish({
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  });
-}))()`,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  if (evaluation.exceptionDetails) {
-    throw new Error(
-      evaluation.exceptionDetails.exception?.description
-      || "Codex automation request failed",
-    );
-  }
-  const response = evaluation.result?.value;
-  if (!response?.ok) throw new Error(response?.error || "Codex automation request failed");
-  if (!Number.isInteger(response.status) || response.status < 200 || response.status >= 300) {
-    throw new Error(`Codex automation request returned HTTP ${response.status}`);
-  }
-  if (typeof response.bodyJsonString !== "string" || response.bodyJsonString.length === 0) {
-    return {};
-  }
-  try {
-    return JSON.parse(response.bodyJsonString);
-  } catch {
-    throw new Error("Codex automation request returned invalid JSON");
-  }
-}
-
-async function handleTaskboardAutomationRequest(send, request) {
-  const rpc = (method, body) => requestCodexAutomationViaCdp(send, method, body);
-  if (request.operation === "list") {
-    const stored = await reconcileStoredTaskboardAutomationPolicy(
-      request.taskboardProjectId,
-      rpc,
-    );
-    return stored ?? reconcileTaskboardAutomation(request, rpc);
-  }
-  return request.operation === "apply-policy"
-    ? updateAndApplyTaskboardAutomationPolicy(request, rpc)
-    : reconcileTaskboardAutomation(request, rpc);
-}
-
-async function applyTaskboardAutomationPolicy(
-  request,
-  rpc,
-  stillCurrent = () => true,
-  {
-    explicit = false,
-    previousQuotaState,
-    automationGate,
-  } = {},
-) {
-  const quota = request.quotaAware
-    ? await readCodexQuotaStatus(request.model)
-    : null;
-  if (!stillCurrent()) return { quota, stale: true };
-
-  const boardSnapshot = request.enabledByUser
-    ? await readTaskboardAutomationBoardState(request)
-    : { state: "pause", activityKey: null };
-  if (!stillCurrent()) return { quota, boardState: boardSnapshot.state, stale: true };
-
-  let listed = null;
-  let currentItem;
-  if (request.enabledByUser) {
-    listed = await reconcileTaskboardAutomation({ ...request, operation: "list" }, rpc);
-    const items = Array.isArray(listed.items) ? listed.items : [];
-    currentItem = (
-      request.automationId
-        ? items.find((item) => item.id === request.automationId)
-        : null
-    ) ?? items[0];
-    if (!request.targetThreadId && currentItem?.targetThreadId) {
-      request = { ...request, targetThreadId: currentItem.targetThreadId };
-    }
-  }
-
-  const gateDecision = taskboardAutomationGateDecision({
-    enabledByUser: request.enabledByUser,
-    explicit,
-    currentLastRunAt: Number(currentItem?.lastRunAt),
-    currentActivityKey: boardSnapshot.activityKey,
-    automationExists: Boolean(currentItem),
-    gate: automationGate,
-  });
-
-  if (!stillCurrent()) return { quota, boardState: boardSnapshot.state, stale: true };
-
-  if (gateDecision.runObserved) {
-    let automationIssue = null;
-    try {
-      automationIssue = await readLatestAutomationRunFailure({
-        codexHomePath,
-        automationName: currentItem?.name ?? buildTaskboardAutomationName(request),
-        lastRunAt: currentItem.lastRunAt,
-      });
-    } catch (error) {
-      if (!shuttingDown) log(`Taskboard automation run diagnosis failed: ${error.message}`);
-    }
-    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
-    return {
-      ...result,
-      operation: "pause",
-      boardState: boardSnapshot.state,
-      autoPaused: true,
-      automationGate: gateDecision.gate,
-      automationIssue,
-      ...(quota ? { quota } : {}),
-    };
-  }
-
-  if (boardSnapshot.state === "pause") {
-    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
-    if (result?.error === "not-found") {
-      return {
-        operation: "pause",
-        boardState: boardSnapshot.state,
-        autoPaused: !explicit,
-        automationGate: gateDecision.gate
-          ? { ...gateDecision.gate, armed: false }
-          : null,
-        automationIssue: null,
-        ...(quota ? { quota } : {}),
-      };
-    }
-    return {
-      ...result,
-      operation: "pause",
-      boardState: boardSnapshot.state,
-      autoPaused: !explicit,
-      automationGate: gateDecision.gate
-        ? { ...gateDecision.gate, armed: false }
-        : null,
-      automationIssue: null,
-      ...(quota ? { quota } : {}),
-    };
-  }
-
-  if (boardSnapshot.state === "unknown") {
-    return {
-      ...listed,
-      operation: "list",
-      boardState: boardSnapshot.state,
-      ...(quota ? { quota } : {}),
-    };
-  }
-
-  if (gateDecision.operation === "pause") {
-    const result = await reconcileTaskboardAutomation({ ...request, operation: "pause" }, rpc);
-    return {
-      ...result,
-      operation: "pause",
-      boardState: boardSnapshot.state,
-      autoPaused: true,
-      automationGate: gateDecision.gate,
-      ...(quota ? { quota } : {}),
-    };
-  }
-
-  const operation = taskboardAutomationPolicyOperation(request, {
-    explicit,
-    previousQuotaState,
-    quotaState: quota?.state,
-    currentStatus: currentItem?.status,
-  });
-  const result = operation === "list"
-    ? { item: currentItem, items: listed.items }
-    : await reconcileTaskboardAutomation({ ...request, operation }, rpc);
-  if (result?.error === "not-found") {
-    return {
-      operation,
-      automationGate: gateDecision.gate,
-      ...(
-        gateDecision.reason === "activity-changed"
-        || gateDecision.reason === "automation-missing"
-        || explicit
-          ? { automationIssue: null }
-          : {}
-      ),
-      ...(quota ? { quota } : {}),
-    };
-  }
-  return {
-    ...result,
-    operation,
-    automationGate: gateDecision.gate,
-    ...(
-      gateDecision.reason === "activity-changed"
-      || gateDecision.reason === "automation-missing"
-      || explicit
-        ? { automationIssue: null }
-        : {}
-    ),
-    ...(quota ? { quota } : {}),
-  };
-}
-
-function storedTaskboardAutomationPolicy(request, record = null) {
-  return {
-    taskboardProjectId: request.taskboardProjectId,
-    codexProjectId: request.codexProjectId,
-    codexProjectKind: request.codexProjectKind,
-    codexHostId: request.codexHostId,
-    projectName: request.projectName,
-    workspacePath: request.workspacePath,
-    skillPath: request.skillPath,
-    ...(request.targetThreadId ? { targetThreadId: request.targetThreadId } : {}),
-    ...(request.automationId ? { automationId: request.automationId } : {}),
-    enabledByUser: request.enabledByUser,
-    quotaAware: request.quotaAware,
-    intervalMinutes: request.intervalMinutes,
-    model: request.model,
-    reasoningEffort: request.reasoningEffort,
-    ...(record?.automationGate ? { automationGate: record.automationGate } : {}),
-    ...(record?.automationIssue ? { automationIssue: record.automationIssue } : {}),
-  };
-}
-
-function restoredTaskboardAutomationPolicy(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const {
-    quota,
-    automationGate,
-    automationIssue,
-    ...stored
-  } = value;
-  const request = parseTaskboardAutomationHostRequest({
-    ...stored,
-    id: "restored-policy",
-    action: "automation",
-    requestId: "restored-policy",
-    operation: "apply-policy",
-  });
-  const normalizedGate = normalizeAutomationGate(automationGate);
-  const normalizedIssue = normalizeAutomationIssue(automationIssue);
-  return request
-    ? {
-      request,
-      ...(quota ? { quota } : {}),
-      ...(normalizedGate ? { automationGate: normalizedGate } : {}),
-      ...(normalizedIssue ? { automationIssue: normalizedIssue } : {}),
-    }
-    : null;
-}
-
-function normalizeAutomationIssue(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  if (value.kind !== "run-failed") return null;
-  if (!Number.isFinite(value.runAt) || typeof value.message !== "string") return null;
-  return {
-    kind: "run-failed",
-    runAt: value.runAt,
-    message: value.message.slice(0, 600),
-  };
-}
-
-async function ensureTaskboardAutomationPoliciesLoaded() {
-  if (taskboardAutomationPoliciesLoadPromise) return taskboardAutomationPoliciesLoadPromise;
-  taskboardAutomationPoliciesLoadPromise = (async () => {
-    let stored = {};
-    try {
-      stored = JSON.parse(await fs.readFile(taskboardAutomationPoliciesPath, "utf8"));
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    if (!stored || typeof stored !== "object" || Array.isArray(stored)) return;
-    for (const value of Object.values(stored)) {
-      const restored = restoredTaskboardAutomationPolicy(value);
-      if (!restored) continue;
-      taskboardAutomationPolicyRecords.set(restored.request.taskboardProjectId, {
-        version: 1,
-        ...restored,
-      });
-    }
-  })();
-  return taskboardAutomationPoliciesLoadPromise;
-}
-
-function persistTaskboardAutomationPolicies() {
-  const data = Object.fromEntries(
-    [...taskboardAutomationPolicyRecords.entries()].map(([projectId, record]) => [
-      projectId,
-      {
-        ...storedTaskboardAutomationPolicy(record.request, record),
-        ...(record.quota ? { quota: record.quota } : {}),
-      },
-    ]),
-  );
-  taskboardAutomationPoliciesWritePromise = taskboardAutomationPoliciesWritePromise
-    .catch(() => {})
-    .then(async () => {
-      await fs.mkdir(path.dirname(taskboardAutomationPoliciesPath), { recursive: true });
-      await fs.writeFile(
-        taskboardAutomationPoliciesPath,
-        `${JSON.stringify(data, null, 2)}\n`,
-        { mode: 0o600 },
-      );
-    });
-  return taskboardAutomationPoliciesWritePromise;
-}
-
-function scheduleTaskboardAutomationPolicyCheck(record, result) {
-  const { request, version } = record;
-  const key = request.taskboardProjectId;
-  const previous = taskboardAutomationPolicyTimers.get(key);
-  if (previous) clearTimeout(previous);
-  taskboardAutomationPolicyTimers.delete(key);
-  if (!request.enabledByUser) return;
-
-  const nextRunAt = Number(result.item?.nextRunAt);
-  const nextRunDelay = Number.isFinite(nextRunAt) && nextRunAt > Date.now()
-    ? Math.max(1_000, nextRunAt - Date.now() - 15_000)
-    : 60_000;
-  const resetDelay = result.quota?.state === "blocked"
-    && Number.isFinite(result.quota.resetsAt)
-    ? Math.max(1_000, result.quota.resetsAt * 1_000 - Date.now() + 1_000)
-    : nextRunDelay;
-  const timer = setTimeout(async () => {
-    if (taskboardAutomationPolicyRecords.get(key)?.version !== version) return;
-    try {
-      await enqueueCurrentTaskboardAutomationPolicy(key);
-    } catch (error) {
-      if (!shuttingDown) log(`Taskboard automation policy check failed: ${error.message}`);
-      const current = taskboardAutomationPolicyRecords.get(key);
-      if (current?.version === version) {
-        scheduleTaskboardAutomationPolicyCheck(current, { quota: { state: "unknown" } });
-      }
-    }
-  }, Math.min(nextRunDelay, resetDelay));
-  timer.unref?.();
-  taskboardAutomationPolicyTimers.set(key, timer);
-}
-
-function enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit = false } = {}) {
-  const key = record.request.taskboardProjectId;
-  const previous = taskboardAutomationPolicyQueues.get(key) ?? Promise.resolve();
-  const run = previous
-    .catch(() => {})
-    .then(async () => {
-      const current = taskboardAutomationPolicyRecords.get(key);
-      if (!current || current.version !== record.version) return { stale: true };
-      const result = await applyTaskboardAutomationPolicy(
-        current.request,
-        rpc,
-        () => taskboardAutomationPolicyRecords.get(key)?.version === current.version,
-        {
-          explicit,
-          previousQuotaState: current.quota?.state,
-          automationGate: current.automationGate,
-        },
-      );
-      if (result.stale) return result;
-      if (result.item?.id) {
-        current.request = { ...current.request, automationId: result.item.id };
-      }
-      if (!current.request.targetThreadId && result.item?.targetThreadId) {
-        current.request = {
-          ...current.request,
-          targetThreadId: result.item.targetThreadId,
-        };
-      }
-      if (current.request.quotaAware && result.quota) current.quota = result.quota;
-      else delete current.quota;
-      if (Object.prototype.hasOwnProperty.call(result, "automationGate")) {
-        if (result.automationGate) current.automationGate = result.automationGate;
-        else delete current.automationGate;
-      }
-      if (Object.prototype.hasOwnProperty.call(result, "automationIssue")) {
-        if (result.automationIssue) current.automationIssue = result.automationIssue;
-        else delete current.automationIssue;
-      }
-      await persistTaskboardAutomationPolicies();
-      scheduleTaskboardAutomationPolicyCheck(current, result);
-      return result;
-    });
-  const tracked = run.finally(() => {
-    if (taskboardAutomationPolicyQueues.get(key) === tracked) {
-      taskboardAutomationPolicyQueues.delete(key);
-    }
-  });
-  taskboardAutomationPolicyQueues.set(key, tracked);
-  return tracked;
-}
-
-async function updateAndApplyTaskboardAutomationPolicy(request, rpc) {
-  await ensureTaskboardAutomationPoliciesLoaded();
-  const previous = taskboardAutomationPolicyRecords.get(request.taskboardProjectId);
-  const record = {
-    version: (previous?.version ?? 0) + 1,
-    request,
-    ...(request.quotaAware && previous?.quota ? { quota: previous.quota } : {}),
-  };
-  taskboardAutomationPolicyRecords.set(request.taskboardProjectId, record);
-  try {
-    await persistTaskboardAutomationPolicies();
-    const result = await enqueueTaskboardAutomationPolicyMutation(record, rpc, { explicit: true });
-    const current = taskboardAutomationPolicyRecords.get(request.taskboardProjectId);
-    if (!current) return result;
-    return {
-      ...result,
-      policy: storedTaskboardAutomationPolicy(current.request),
-      ...(current.quota ? { quota: current.quota } : {}),
-      ...(current.automationIssue ? { automationIssue: current.automationIssue } : {}),
-    };
-  } catch (error) {
-    if (taskboardAutomationPolicyRecords.get(request.taskboardProjectId)?.version === record.version) {
-      if (previous) taskboardAutomationPolicyRecords.set(request.taskboardProjectId, previous);
-      else taskboardAutomationPolicyRecords.delete(request.taskboardProjectId);
-      await persistTaskboardAutomationPolicies();
-    }
-    throw error;
-  }
-}
-
-async function reconcileStoredTaskboardAutomationPolicy(projectId, rpc) {
-  await ensureTaskboardAutomationPoliciesLoaded();
-  const record = taskboardAutomationPolicyRecords.get(projectId);
-  if (!record) return null;
-  const result = await enqueueTaskboardAutomationPolicyMutation(record, rpc);
-  const current = taskboardAutomationPolicyRecords.get(projectId);
-  return {
-    ...result,
-    policy: storedTaskboardAutomationPolicy(current.request),
-    ...(current.quota ? { quota: current.quota } : {}),
-    ...(current.automationIssue ? { automationIssue: current.automationIssue } : {}),
-  };
-}
-
-async function enqueueCurrentTaskboardAutomationPolicy(projectId) {
-  await ensureTaskboardAutomationPoliciesLoaded();
-  const record = taskboardAutomationPolicyRecords.get(projectId);
-  if (!record) return { stale: true };
-  return enqueueTaskboardAutomationPolicyMutation(
-    record,
-    (method, body) => requestCodexAutomationViaCdp(
-      currentTaskboardAutomationSender(),
-      method,
-      body,
-    ),
-  );
-}
-
-async function readTaskboardAutomationBoardState(request) {
-  if (!taskboardEnabled || !taskboardUrl) return { state: "unknown", activityKey: null };
-  try {
-    const pageUrl = resolveTaskboardHostPageUrl();
-    const apiUrl = new URL("api/tasks", pageUrl);
-    apiUrl.searchParams.set("projectId", request.taskboardProjectId);
-    apiUrl.searchParams.set("archived", "false");
-    const challenge = randomBytes(32).toString("hex");
-    const response = await fetch(apiUrl, {
-      headers: {
-        accept: "application/json",
-        origin: "app://-",
-        "x-codex-taskboard-challenge": challenge,
-      },
-      signal: AbortSignal.timeout(1_500),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    verifyTaskboardProof(challenge, response.headers.get("x-codex-taskboard-proof"));
-    const payload = await response.json();
-    return {
-      state: taskboardAutomationBoardState(payload?.tasks),
-      activityKey: taskboardAutomationActivityKey(payload?.tasks),
-    };
-  } catch (error) {
-    if (!shuttingDown) log(`Taskboard automation board check failed: ${error.message}`);
-    return { state: "unknown", activityKey: null };
-  }
-}
-
-async function restoreTaskboardAutomationPolicies(send, { retryOnTransientFailure = true } = {}) {
-  registerTaskboardAutomationSender(send);
-  if (taskboardAutomationRestoredSessions.has(send)) return;
-  const pending = taskboardAutomationRestorePromises.get(send);
-  if (pending) return pending;
-  const restoring = (async () => {
-    await ensureTaskboardAutomationPoliciesLoaded();
-    for (const [projectId, record] of taskboardAutomationPolicyRecords) {
-      if (record.request.enabledByUser) {
-        await enqueueCurrentTaskboardAutomationPolicy(projectId);
-      }
-    }
-    taskboardAutomationRestoredSessions.add(send);
-  })();
-  taskboardAutomationRestorePromises.set(send, restoring);
-  try {
-    await restoring;
-    if (taskboardAutomationRestoreRetryTimer !== null) {
-      clearTimeout(taskboardAutomationRestoreRetryTimer);
-      taskboardAutomationRestoreRetryTimer = null;
-    }
-  } catch (error) {
-    if (retryOnTransientFailure && isTransientTaskboardAutomationRestoreError(error)) {
-      scheduleTaskboardAutomationRestoreRetry();
-    }
-    throw error;
-  } finally {
-    taskboardAutomationRestorePromises.delete(send);
-  }
-}
-
 function invalidatePageSession(targetId, sessionId, reason) {
   if (!targetId) return false;
   const current = pageSessions.get(targetId);
   if (!current || (sessionId && current.sessionId !== sessionId)) return false;
-  current.dispose?.();
   pageSessions.delete(targetId);
   pageTargetsBySessionId.delete(current.sessionId);
   attachedTargetIds.delete(targetId);
@@ -1867,704 +973,13 @@ function invalidatePageSession(targetId, sessionId, reason) {
 }
 
 function clearPageSessions(reason) {
-  for (const [targetId, session] of pageSessions) {
-    session.dispose?.();
+  for (const targetId of pageSessions.keys()) {
     pageSessions.delete(targetId);
   }
   pageTargetsBySessionId.clear();
   attachedTargetIds.clear();
   attachingTargetIds.clear();
   if (reason) log(`Codex page sessions cleared reason=${reason}`);
-}
-
-function parseTaskboardHostRequest(payload) {
-  const error = "Taskboard host request is invalid";
-  if (typeof payload !== "string" || payload.length > 4_096) {
-    return { id: null, request: null, error };
-  }
-
-  let request;
-  try {
-    request = JSON.parse(payload);
-  } catch {
-    return { id: null, request: null, error };
-  }
-
-  const id = request
-    && typeof request.id === "string"
-    && /^[a-z0-9-]{1,80}$/i.test(request.id)
-    ? request.id
-    : null;
-  if (!id) return { id: null, request: null, error };
-  if (request.action === "ensure") return { id, request, error: null };
-  if (request.action === "prepare-frame" || request.action === "release-frame") {
-    return { id, request, error: null };
-  }
-  if (
-    request.action === "load-frame"
-    && typeof request.frameName === "string"
-    && /^codex-taskboard-[a-f0-9-]{36,80}$/i.test(request.frameName)
-    && typeof request.frameCapability === "string"
-    && /^[a-f0-9-]{36,80}$/i.test(request.frameCapability)
-  ) return { id, request, error: null };
-  if (
-    request.action === "prefill-task-composer"
-    && typeof request.instruction === "string"
-    && request.instruction.length > 0
-    && request.instruction.length <= 1_024
-  ) return { id, request, error: null };
-  if (request.action === "open-external" && typeof request.url === "string") {
-    try {
-      const url = new URL(request.url);
-      if (url.protocol === "https:" && url.href.length <= 2_048) {
-        return { id, request: { ...request, url: url.href }, error: null };
-      }
-    } catch {}
-  }
-  if (
-    request.action === "api"
-    && typeof request.requestId === "string"
-    && /^[a-z0-9-]{1,100}$/i.test(request.requestId)
-    && typeof request.path === "string"
-    && request.path.length > 0
-    && request.path.length <= 2_048
-    && typeof request.method === "string"
-    && /^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS)$/i.test(request.method)
-    && (!request.headers || (typeof request.headers === "object" && !Array.isArray(request.headers)))
-    && (!request.bodyBase64 || (typeof request.bodyBase64 === "string" && request.bodyBase64.length <= 8_000_000))
-  ) return { id, request, error: null };
-  if (request.action === "automation") return { id, request, error: null };
-  if (
-    request.action === "service"
-    && (request.operation === "status" || request.operation === "restart")
-  ) return { id, request, error: null };
-  return { id, request: null, error };
-}
-
-async function ensureTaskboardService(send) {
-  if (!taskboardEnabled) throw new Error("Taskboard integration is disabled");
-  const checkPage = async () => {
-    const pageUrl = resolveTaskboardHostPageUrl();
-    const challenge = randomBytes(32).toString("hex");
-    const response = await fetch(pageUrl, {
-      cache: "no-store",
-      headers: {
-        origin: "app://-",
-        "x-codex-taskboard-challenge": challenge,
-      },
-      signal: AbortSignal.timeout(1_500),
-    });
-    if (!response.ok) throw new Error(`Taskboard page check failed with HTTP ${response.status}`);
-    verifyTaskboardProof(challenge, response.headers.get("x-codex-taskboard-proof"));
-    return { managed: true, restarted: false };
-  };
-
-  try {
-    return await checkPage();
-  } catch (error) {
-    if (!/Taskboard page check failed with HTTP 404/.test(String(error?.message || error))) {
-      throw error;
-    }
-    const raw = await runTaskboardRuntimeOperation("status");
-    const configChanged = await syncTaskboardRuntimeConfig(send, raw);
-    if (!configChanged) throw error;
-    return checkPage();
-  }
-}
-
-function powershellLiteral(value) {
-  return "'" + String(value ?? "").replaceAll("'", "''") + "'";
-}
-
-function redactTaskboardServiceText(value) {
-  let text = String(value || "");
-  for (const secret of [taskboardInstanceSecret]) {
-    if (secret) text = text.replaceAll(secret, "[redacted]");
-  }
-  for (const token of [taskboardLaunchInstanceId]) {
-    if (token) text = text.replaceAll(token, "[redacted]");
-  }
-  return text;
-}
-
-function runTaskboardRuntimeOperation(operation) {
-  const command = operation === "restart"
-    ? `Start-CodexPlusTaskboard -Force -StateRoot ${powershellLiteral(taskboardStateDirectory)}`
-    : `Get-CodexPlusTaskboardStatus -StateRoot ${powershellLiteral(taskboardStateDirectory)}`;
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `Import-Module -Name ${powershellLiteral(taskboardRuntimePath)} -Force`,
-    `$status = ${command}`,
-    "$status | Select-Object Available,Root,Port,Url,EmbedUrl,ProcessId,Healthy,Reason,NodePath,OwnerMarker,StatePreserved,InstanceToken,InstanceSecret | ConvertTo-Json -Compress -Depth 6",
-  ].join("; ");
-
-  return new Promise((resolve, reject) => {
-    const child = spawn("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      script,
-    ], {
-      cwd: scriptDirectory,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const appendCapped = (current, chunk) => {
-      const next = current + chunk.toString("utf8");
-      return next.length > 16_000 ? next.slice(next.length - 16_000) : next;
-    };
-    child.stdout.on("data", (chunk) => { stdout = appendCapped(stdout, chunk); });
-    child.stderr.on("data", (chunk) => { stderr = appendCapped(stderr, chunk); });
-    const settle = (code, signal = null) => {
-      if (settled) return;
-      settled = true;
-      const parsed = parseTrailingJson(stdout);
-      if (code === 0 && parsed && typeof parsed === "object") {
-        resolve(parsed);
-      } else {
-        const detail = redactTaskboardServiceText([stderr, stdout].filter(Boolean).join("\n").trim());
-        reject(new Error(detail || `Taskboard runtime exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}`));
-      }
-      child.stdout.destroy();
-      child.stderr.destroy();
-    };
-    child.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(redactTaskboardServiceText(error.message)));
-    });
-    // Windows PowerShell can exit while a descendant keeps stdout/stderr
-    // inherited. Waiting only for `close` then leaves the host request stuck
-    // forever even though the runtime operation already produced JSON.
-    child.on("exit", (code, signal) => {
-      setImmediate(() => settle(code, signal));
-    });
-    child.on("close", (code, signal) => settle(code, signal));
-  });
-}
-
-function normalizeTaskboardServiceStatus(raw) {
-  const available = raw?.Available === true;
-  const healthy = raw?.Healthy === true;
-  const processId = Number.isInteger(Number(raw?.ProcessId)) && Number(raw.ProcessId) > 0
-    ? Number(raw.ProcessId)
-    : null;
-  const reason = redactTaskboardServiceText(raw?.Reason || "Taskboard status is unavailable.");
-  let state = "unavailable";
-  if (healthy) state = "healthy";
-  else if (processId) state = "unhealthy";
-  else if (available) state = "stopped";
-  return {
-    state,
-    available,
-    healthy,
-    reason,
-    root: String(raw?.Root || ""),
-    port: Number.isInteger(Number(raw?.Port)) ? Number(raw.Port) : null,
-    url: String(raw?.Url || ""),
-    nodePath: String(raw?.NodePath || ""),
-    processId,
-    statePreserved: raw?.StatePreserved === true,
-  };
-}
-
-async function syncTaskboardRuntimeConfig(send, raw) {
-  const nextEmbedUrl = String(raw?.EmbedUrl || "").trim();
-  const nextToken = String(raw?.InstanceToken || "").trim();
-  const nextSecret = String(raw?.InstanceSecret || "").trim();
-  if (!nextEmbedUrl || !nextToken || !nextSecret) return false;
-
-  const nextUrl = resolveTaskboardUrl(nextEmbedUrl);
-  if (!nextUrl) return false;
-  const changed = taskboardUrl?.href !== nextUrl.href
-    || taskboardLaunchInstanceId !== nextToken
-    || taskboardInstanceSecret !== nextSecret;
-  taskboardUrl = nextUrl;
-  taskboardLaunchInstanceId = nextToken;
-  taskboardInstanceSecret = nextSecret;
-  if (!changed) return false;
-
-  taskboardRuntimeSource = buildTaskboardRuntimeSource({
-    enabled: taskboardEnabled,
-    url: taskboardUrl,
-    launchInstanceId: taskboardLaunchInstanceId,
-    hostCapability: taskboardHostCapability,
-  });
-  const result = await send("Runtime.evaluate", {
-    expression: taskboardRuntimeSource,
-    returnByValue: true,
-  });
-  if (result?.exceptionDetails) {
-    throw new Error(
-      result.exceptionDetails.exception?.description
-        ?? result.exceptionDetails.text
-        ?? "Taskboard runtime configuration refresh failed",
-    );
-  }
-  return true;
-}
-
-async function handleTaskboardServiceRequest(send, operation) {
-  if (taskboardServiceOperationPromise) return taskboardServiceOperationPromise;
-  if (!taskboardEnabled) {
-    return {
-      service: {
-        state: "disabled",
-        available: false,
-        healthy: false,
-        reason: "Taskboard integration is disabled.",
-        root: "",
-        port: null,
-        url: "",
-        nodePath: "",
-        processId: null,
-        statePreserved: false,
-      },
-      restarted: false,
-      reloadFrame: false,
-    };
-  }
-
-  taskboardServiceOperationPromise = (async () => {
-    const raw = await runTaskboardRuntimeOperation(operation);
-    const configChanged = await syncTaskboardRuntimeConfig(send, raw);
-    const normalizedService = normalizeTaskboardServiceStatus(raw);
-    const service = operation === "restart" && !normalizedService.healthy
-      ? { ...normalizedService, state: "restart-failed" }
-      : normalizedService;
-    return {
-      service,
-      restarted: operation === "restart" && service.healthy,
-      reloadFrame: operation === "restart" && service.healthy,
-      configChanged,
-    };
-  })().finally(() => {
-    taskboardServiceOperationPromise = null;
-  });
-  return taskboardServiceOperationPromise;
-}
-
-async function requestTaskboardApiViaHost(send, request) {
-  const perform = async () => {
-    const pageUrl = resolveTaskboardHostPageUrl();
-    const apiUrl = resolveTaskboardApiUrl(request.path, pageUrl);
-    const challenge = randomBytes(32).toString("hex");
-    const headers = new Headers();
-    for (const [key, value] of Object.entries(request.headers || {})) {
-      if (!/^[a-z0-9-]{1,80}$/i.test(key) || typeof value !== "string" || value.length > 16_000) continue;
-      if (["connection", "content-length", "host", "origin", "transfer-encoding"].includes(key.toLowerCase())) continue;
-      headers.set(key, value);
-    }
-    headers.set("origin", "app://-");
-    headers.set("x-codex-taskboard-challenge", challenge);
-    let body;
-    if (request.bodyBase64) {
-      try {
-        body = Buffer.from(request.bodyBase64, "base64");
-      } catch {
-        throw new Error("Taskboard API request body is invalid");
-      }
-    }
-    const response = await fetch(apiUrl, {
-      method: String(request.method || "GET").toUpperCase(),
-      headers,
-      body,
-      cache: "no-store",
-      signal: AbortSignal.timeout(30_000),
-    });
-    const bodyBuffer = Buffer.from(await response.arrayBuffer());
-    const proof = response.headers.get("x-codex-taskboard-proof");
-    const routeNotFound = response.status === 404 && !proof;
-    if (!routeNotFound) verifyTaskboardProof(challenge, proof);
-    return {
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers.entries()),
-      bodyBase64: bodyBuffer.toString("base64"),
-      routeNotFound,
-    };
-  };
-
-  let result = await perform();
-  if (result.routeNotFound) {
-    const raw = await runTaskboardRuntimeOperation("status");
-    const changed = await syncTaskboardRuntimeConfig(send, raw);
-    if (changed) result = await perform();
-  }
-  const { routeNotFound: _routeNotFound, ...response } = result;
-  return response;
-}
-
-function resolveTaskboardApiUrl(requestPath, pageUrl) {
-  const rawPath = String(requestPath || "").trim();
-  if (!rawPath || /^https?:\/\//i.test(rawPath)) throw new Error("Taskboard API path is invalid");
-  const basePath = new URL(pageUrl).pathname.replace(/\/+$/, "");
-  let relativePath = rawPath;
-  if (basePath && (rawPath === basePath || rawPath.startsWith(`${basePath}/`))) {
-    relativePath = rawPath.slice(basePath.length) || "/";
-  }
-  if (!relativePath.startsWith("/api/")) throw new Error("Taskboard API path is outside the local API");
-  const apiUrl = new URL(relativePath.replace(/^\/+/, ""), pageUrl);
-  if (apiUrl.origin !== pageUrl.origin) throw new Error("Taskboard API origin is invalid");
-  return apiUrl;
-}
-
-function resolveTaskboardHostPageUrl() {
-  const raw = taskboardUrl || "http://127.0.0.1:47823/?host=codex";
-  const pageUrl = new URL(raw);
-  if (!pageUrl.searchParams.has("host")) pageUrl.searchParams.set("host", "codex");
-  return pageUrl;
-}
-
-function verifyTaskboardProof(challenge, proof) {
-  if (!taskboardInstanceSecret) return;
-  const expected = createHmac("sha256", taskboardInstanceSecret).update(challenge).digest("hex");
-  if (proof !== expected) throw new Error("Taskboard service identity check failed");
-}
-
-async function loadTaskboardFrameViaCdp(send, frameName, frameCapability, frameChallenge) {
-  const pageUrl = resolveTaskboardHostPageUrl();
-  const html = (await fetchTaskboardResource(pageUrl, "text/html")).body;
-  const scriptSrc = findTaskboardDocumentAttribute(html, "script", "src");
-  const stylesheetHref = findTaskboardDocumentAttribute(html, "link", "href", (tag) => (
-    /\brel=["']stylesheet["']/i.test(tag)
-  ));
-  if (!scriptSrc || !stylesheetHref) {
-    throw new Error("Taskboard document is missing its bundled script or stylesheet");
-  }
-  const [script, stylesheet] = await Promise.all([
-    fetchTaskboardResource(new URL(scriptSrc, pageUrl), "text/javascript"),
-    fetchTaskboardResource(new URL(stylesheetHref, pageUrl), "text/css"),
-  ]);
-  const documentHtml = await buildTaskboardInlineDocument({
-    pageUrl,
-    frameCapability,
-    frameChallenge,
-    script,
-    stylesheet,
-  });
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const { frameTree } = await send("Page.getFrameTree");
-    const frame = findTaskboardFrameByName(frameTree, frameName);
-    if (frame) {
-      await send("Page.setDocumentContent", {
-        frameId: frame.id,
-        html: documentHtml,
-      });
-      return { loaded: true };
-    }
-    await delay(50);
-  }
-  throw new Error("Timed out waiting for the isolated Taskboard frame");
-}
-
-async function fetchTaskboardResource(url, contentType) {
-  const challenge = randomBytes(32).toString("hex");
-  const response = await fetch(url, {
-    cache: "no-store",
-    headers: {
-      origin: "app://-",
-      "x-codex-taskboard-challenge": challenge,
-    },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!response.ok) throw new Error(`Taskboard resource HTTP ${response.status}: ${url.pathname}`);
-  verifyTaskboardProof(challenge, response.headers.get("x-codex-taskboard-proof"));
-  const body = contentType === "text/html"
-    || contentType === "text/javascript"
-    || contentType === "text/css"
-    ? await response.text()
-    : Buffer.from(await response.arrayBuffer());
-  return { body, contentType: response.headers.get("content-type") || contentType };
-}
-
-function findTaskboardDocumentAttribute(html, tagName, attributeName, predicate = () => true) {
-  const tags = String(html).match(new RegExp(`<${tagName}\\b[^>]*>`, "gi")) || [];
-  for (const tag of tags) {
-    if (!predicate(tag)) continue;
-    const match = tag.match(new RegExp(`${attributeName}=["']([^"']+)["']`, "i"));
-    if (match?.[1]) return match[1];
-  }
-  return "";
-}
-
-async function buildTaskboardInlineDocument({ pageUrl, frameCapability, frameChallenge, script, stylesheet }) {
-  let scriptSource = String(script.body || "");
-  let stylesheetSource = String(stylesheet.body || "");
-  const assetNames = new Set();
-  for (const source of [scriptSource, stylesheetSource]) {
-    for (const match of source.matchAll(/(?<=["'\x60\/(])([A-Za-z0-9_-]+\.(?:png|svg|woff2))\b/g)) {
-      if (isExternalTaskboardAssetReference(source, match.index ?? 0)) continue;
-      assetNames.add(match[1]);
-    }
-  }
-  for (const assetName of assetNames) {
-    let asset;
-    try {
-      asset = await fetchTaskboardResource(new URL(assetName, pageUrl), "application/octet-stream");
-    } catch (error) {
-      if (!/Taskboard resource HTTP 404/.test(String(error?.message || error))) throw error;
-      asset = await fetchTaskboardResource(new URL(`assets/${assetName}`, pageUrl), "application/octet-stream");
-    }
-    const buffer = Buffer.isBuffer(asset.body) ? asset.body : Buffer.from(String(asset.body));
-    const dataUri = `data:${asset.contentType.split(";", 1)[0]};base64,${buffer.toString("base64")}`;
-    scriptSource = scriptSource.replaceAll(assetName, dataUri);
-    stylesheetSource = stylesheetSource.replaceAll(assetName, dataUri);
-  }
-  scriptSource = rewriteTaskboardModuleAssetReferences(scriptSource);
-  stylesheetSource = stylesheetSource.replaceAll(
-    /url\(https:\/\/fonts\.gstatic\.com\/[^)]+\)/g,
-    "url(data:font/woff2;base64,)",
-  );
-  const bootstrap = buildTaskboardInlineBootstrapSource({ frameCapability, frameChallenge });
-  const escapeScript = (value) => value.replaceAll("</script", "<\\/script");
-  const escapeStyle = (value) => value.replaceAll("</style", "<\\/style");
-  return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><base href=${JSON.stringify(pageUrl.href)}><style>${escapeStyle(stylesheetSource)}</style><script>${escapeScript(bootstrap)}</script></head><body><div id="root"></div><script type="module">${escapeScript(scriptSource)}</script></body></html>`;
-}
-
-function isExternalTaskboardAssetReference(source, index) {
-  const prefix = String(source).slice(0, index);
-  const boundary = Math.max(prefix.lastIndexOf("\""), prefix.lastIndexOf("'"), prefix.lastIndexOf("`"));
-  return /^https?:\/\/[^\s"'`()]*$/i.test(prefix.slice(boundary + 1));
-}
-
-function rewriteTaskboardModuleAssetReferences(source) {
-  return String(source).replaceAll(
-    /(["'\x60])\.\/(?!assets\/)([A-Za-z0-9][A-Za-z0-9._-]*\.js)\1/g,
-    "$1./assets/$2$1",
-  );
-}
-
-function buildTaskboardInlineBootstrapSource({ frameCapability, frameChallenge }) {
-  return `(() => {
-  const capability = ${JSON.stringify(frameCapability || "")};
-  const challenge = ${JSON.stringify(frameChallenge || "")};
-  globalThis.__CODEX_TASKBOARD_FRAME_CAPABILITY__ = capability;
-  globalThis.__CODEX_TASKBOARD_FRAME_CHALLENGE__ = challenge;
-  const apiRequestType = "taskboard:api-request";
-  const apiResponseType = "taskboard:api-response";
-  const pending = new Map();
-  let sequence = 0;
-
-  const bytesToBase64 = (bytes) => {
-    let binary = "";
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-    }
-    return btoa(binary);
-  };
-  const base64ToBytes = (value) => {
-    if (!value) return new Uint8Array();
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    return bytes;
-  };
-  const bodyToBase64 = async (body) => {
-    if (body == null) return null;
-    if (typeof body === "string") return bytesToBase64(new TextEncoder().encode(body));
-    if (body instanceof URLSearchParams) return bytesToBase64(new TextEncoder().encode(body.toString()));
-    if (body instanceof Blob) return bytesToBase64(new Uint8Array(await body.arrayBuffer()));
-    if (body instanceof ArrayBuffer) return bytesToBase64(new Uint8Array(body));
-    if (ArrayBuffer.isView(body)) return bytesToBase64(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
-    throw new TypeError("Unsupported embedded Taskboard request body");
-  };
-  const isTaskboardApiUrl = (input) => {
-    try {
-      const rawUrl = typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.href
-          : input?.url;
-      const url = new URL(rawUrl, document.baseURI);
-      return url.pathname.endsWith("/api") || url.pathname.includes("/api/");
-    } catch (_) {
-      return false;
-    }
-  };
-  const requestViaHost = async (input, init = {}) => {
-    const sourceRequest = input instanceof Request ? input : null;
-    const url = new URL(sourceRequest?.url || input, document.baseURI);
-    const headers = new Headers(sourceRequest?.headers);
-    if (init.headers) new Headers(init.headers).forEach((value, key) => headers.set(key, value));
-    let body = init.body;
-    if (body == null && sourceRequest && !["GET", "HEAD"].includes(sourceRequest.method)) {
-      body = await sourceRequest.clone().arrayBuffer();
-    }
-    const requestId = "api-" + Date.now().toString(36) + "-" + (++sequence).toString(36);
-    const payload = {
-      requestId,
-      path: url.pathname + url.search,
-      method: String(init.method || sourceRequest?.method || "GET").toUpperCase(),
-      headers: Object.fromEntries(headers.entries()),
-      bodyBase64: await bodyToBase64(body),
-    };
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        pending.delete(requestId);
-        reject(new Error("Taskboard API 请求超时"));
-      }, 30_000);
-      pending.set(requestId, { resolve, reject, timer });
-      window.parent.postMessage({
-        type: apiRequestType,
-        capability,
-        challenge,
-        payload,
-      }, "*");
-    });
-  };
-  const nativeFetch = globalThis.fetch.bind(globalThis);
-  globalThis.fetch = (input, init) => {
-    if (!isTaskboardApiUrl(input)) return nativeFetch(input, init);
-    return requestViaHost(input, init).then((payload) => {
-      if (!payload?.ok) throw new Error(payload?.error || "Taskboard API 请求失败");
-      return new Response(payload.bodyBase64 ? base64ToBytes(payload.bodyBase64) : null, {
-        status: payload.status || 200,
-        statusText: payload.statusText || "",
-        headers: payload.headers || {},
-      });
-    });
-  };
-  window.addEventListener("message", (event) => {
-    if (event.source !== window.parent || event.data?.type !== apiResponseType) return;
-    const message = event.data;
-    if (message.capability !== capability || message.challenge !== challenge) return;
-    const response = message.payload;
-    const request = pending.get(response?.requestId);
-    if (!request) return;
-    pending.delete(response.requestId);
-    clearTimeout(request.timer);
-    if (!response.ok) request.reject(new Error(response.error || "Taskboard API 请求失败"));
-    else request.resolve(response);
-  });
-
-  class EmbeddedEventSource extends EventTarget {
-    static CONNECTING = 0;
-    static OPEN = 1;
-    static CLOSED = 2;
-    constructor(url) {
-      super();
-      this.url = String(url);
-      this.readyState = EmbeddedEventSource.CONNECTING;
-      this.closed = false;
-      this.opened = false;
-      this.poll();
-      this.timer = setInterval(() => this.poll(), 1_500);
-    }
-    async poll() {
-      if (this.closed) return;
-      try {
-        const snapshotUrl = this.url.replace(/\\/events\\/?(?=\\?|$)/, "").replace(/\\/+$/, "");
-        const response = await globalThis.fetch(snapshotUrl, { cache: "no-store" });
-        if (!response.ok) throw new Error("Taskboard event polling failed");
-        this.readyState = EmbeddedEventSource.OPEN;
-        if (!this.opened) {
-          this.opened = true;
-          this.dispatchEvent(new Event("open"));
-        }
-        this.dispatchEvent(new Event("ai.event"));
-      } catch (_) {
-        if (!this.closed) this.dispatchEvent(new Event("error"));
-      }
-    }
-    close() {
-      this.closed = true;
-      this.readyState = EmbeddedEventSource.CLOSED;
-      clearInterval(this.timer);
-    }
-  }
-  globalThis.EventSource = EmbeddedEventSource;
-})();`;
-}
-
-function findTaskboardFrameByName(frameTree, frameName) {
-  if (frameTree?.frame?.name === frameName) return frameTree.frame;
-  for (const child of frameTree?.childFrames ?? []) {
-    const match = findTaskboardFrameByName(child, frameName);
-    if (match) return match;
-  }
-  return null;
-}
-
-async function sendTaskboardHostResponse(send, executionContextId, response) {
-  await send("Runtime.evaluate", {
-    contextId: executionContextId,
-    expression: `window.postMessage({
-  type: ${JSON.stringify(taskboardHostResponseMessage)},
-  capability: ${JSON.stringify(taskboardHostCapability)},
-  response: ${JSON.stringify(response)}
-}, window.location.origin)`,
-    returnByValue: true,
-  });
-}
-
-async function prefillTaskComposerViaCdp(send, executionContextId, request) {
-  const instruction = request.instruction;
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    const prepared = await send("Runtime.evaluate", {
-      expression: `(() => {
-  const instruction = ${JSON.stringify(instruction)};
-  const editor = Array.from(document.querySelectorAll('[data-codex-composer="true"][contenteditable="true"]'))
-    .find((candidate) => candidate.getClientRects().length > 0);
-  if (!editor) return { ready: false };
-  if ((editor.textContent || "").includes(instruction)) return { ready: true, matches: true };
-  editor.focus();
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(editor);
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  return { ready: true, matches: false };
-})()`,
-      contextId: executionContextId,
-      returnByValue: true,
-    });
-    if (!prepared.result.value?.ready) {
-      await delay(80);
-      continue;
-    }
-    if (prepared.result.value.matches) return { prefilled: true };
-    await send("Input.insertText", { text: instruction });
-    break;
-  }
-
-  while (Date.now() < deadline) {
-    const verified = await send("Runtime.evaluate", {
-      expression: `(() => {
-  const instruction = ${JSON.stringify(instruction)};
-  const editor = Array.from(document.querySelectorAll('[data-codex-composer="true"][contenteditable="true"]'))
-    .find((candidate) => candidate.getClientRects().length > 0);
-  return Boolean(editor && (editor.textContent || "").includes(instruction));
-})()`,
-      contextId: executionContextId,
-      returnByValue: true,
-    });
-    if (verified.result.value === true) return { prefilled: true };
-    await delay(80);
-  }
-  throw new Error("Timed out while writing the task instruction into the Codex composer");
-}
-
-async function openTaskboardExternalUrl(request) {
-  await new Promise((resolve, reject) => {
-    const child = spawn("rundll32.exe", ["url.dll,FileProtocolHandler", request.url], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    child.once("error", reject);
-    child.once("spawn", () => {
-      child.unref();
-      resolve();
-    });
-  });
-  return { opened: true };
 }
 
 async function fetchJson(url, timeoutMs) {
@@ -2588,44 +1003,6 @@ function parseArguments(argumentsList) {
     }
   }
   return parsed;
-}
-
-function resolveTaskboardUrl(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  try {
-    const url = new URL(raw);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-    // The embedded document uses a relative base for Vite assets. Keep the
-    // instance-token route as a directory so ./assets/* stays under the
-    // authenticated route instead of resolving to the server root.
-    if (!url.pathname.endsWith("/")) url.pathname += "/";
-    if (!url.searchParams.has("host")) url.searchParams.set("host", "codex");
-    return url.href;
-  } catch {
-    return "";
-  }
-}
-
-function buildTaskboardRuntimeSource({ enabled, url, launchInstanceId, hostCapability }) {
-  const config = {
-    enabled: Boolean(enabled),
-    url: String(url || ""),
-    launchInstanceId: String(launchInstanceId || "codex-plus-pro"),
-    sourceHash: `codex-plus-pro-taskboard-v1-${String(hostCapability || "default")}`,
-  };
-  let managedOrigin = "";
-  try {
-    managedOrigin = new URL(config.url).origin;
-  } catch {}
-  return `(() => {
-  const config = ${JSON.stringify(config)};
-  window.__codexPlusProTaskboardConfig = Object.freeze(config);
-  window.__CODEX_TASKBOARD_URL__ = config.url;
-  window.__CODEX_TASKBOARD_MANAGED_ORIGIN__ = ${JSON.stringify(managedOrigin)};
-  window.__CODEX_TASKBOARD_SOURCE_HASH__ = config.sourceHash;
-  window.__CODEX_TASKBOARD_HOST_CAPABILITY__ = ${JSON.stringify(hostCapability || "")};
-})();`;
 }
 
 function decodeBase64Option(value) {
@@ -2945,11 +1322,11 @@ try {
   });
 }
 
-async function applyThemeAssets(send, wallpaperDataUri, logoDataUri, accentAssetPacks = null) {
+function buildThemeAssetSource(wallpaperDataUri, logoDataUri, accentAssetPacks = null) {
   // Apply in two steps so a single evaluate stays smaller.
   // Also expose default asset URIs + accent packs so the page can restore them on "reset"
   // and so first paint uses the saved accent pack (not always pokedex defaults).
-  const wallpaperExpression = `(() => {
+  return `(() => {
     const root = document.documentElement;
     if (!root) return { ok: false };
     window.__codexPlusProDefaultWallpaper = ${JSON.stringify(wallpaperDataUri)};
@@ -3012,6 +1389,10 @@ async function applyThemeAssets(send, wallpaperDataUri, logoDataUri, accentAsset
     }
     return { ok: true, wallpaper: true, accent: savedAccent, wallpaperMode, logoMode };
   })()`;
+}
+
+async function applyThemeAssets(send, wallpaperDataUri, logoDataUri, accentAssetPacks = null) {
+  const wallpaperExpression = buildThemeAssetSource(wallpaperDataUri, logoDataUri, accentAssetPacks);
   const logoExpression = `(() => {
     // Logo already applied with wallpaper step when packs are available.
     // Only fill a missing default logo; never overwrite a custom or pack logo.
@@ -3133,29 +1514,37 @@ async function applyCssInChunks(send, cssText) {
 // that reject the full stylesheet payload.
 // -----------------------------------------------------------------------------
 // Windows Scope B2 contract:
-// - Theme, accent, wallpaper/logo, flat model picker, and pet are user-controllable.
+// - Theme, accent, wallpaper/logo, model picker, and pet are user-controllable.
 // - Settings UI renders theme + model picker + pet (PiP retired).
 // - pet-notifications.js is injected after this runtime source.
 // -----------------------------------------------------------------------------
 function buildInjectionSource(css) {
-  return `(() => {
+  return `(function initializeRendererDecorations() {
+    if (!document.documentElement) {
+      document.addEventListener("DOMContentLoaded", initializeRendererDecorations, { once: true });
+      return;
+    }
     const STYLE_ID = "codex-pokedex-theme-style";
     const THEME_ATTRIBUTE = "data-codex-pokedex-theme";
+    const HOST_THEME_ATTRIBUTE = "data-theme";
+    const DARK_THEME_CLASS = "electron-dark";
+    const DARK_THEME_COMPAT_ATTRIBUTE = "data-codex-plus-dark-theme-compat";
     const OVERLAY_ATTRIBUTE = "data-codex-pokedex-avatar-overlay";
     const HOME_ATTRIBUTE = "data-codex-pokedex-home";
     const HOME_PANEL_ATTRIBUTE = "data-codex-pokedex-home-panel";
     const MAIN_SURFACE_ATTRIBUTE = "data-codex-pokedex-main-surface";
     const HEADER_ATTRIBUTE = "data-codex-pokedex-header";
     const COMPOSER_ATTRIBUTE = "data-codex-pokedex-composer";
+    const APPROVAL_SURFACE_ATTRIBUTE = "data-codex-approval-surface";
+    const APPROVAL_MCP_ATTRIBUTE = "data-codex-approval-mcp";
     const TASK_RUNNING_ATTRIBUTE = "data-codex-pokedex-task-running";
     const TASK_STATUS_ATTRIBUTE = "data-codex-plus-task-status";
     const TASK_STATUS_STATE_ATTRIBUTE = "data-codex-plus-task-status-state";
     const FLAT_PICKER_ATTRIBUTE = "data-codex-pokedex-flat-picker";
     const FLAT_PICKER_SURFACE_ATTRIBUTE = "data-codex-pokedex-flat-picker-surface";
-    const FLAT_PICKER_FALLBACK_ATTRIBUTE = "data-codex-pokedex-flat-picker-fallback";
     const FLAT_PICKER_FAILURE_ATTRIBUTE = "data-codex-pokedex-flat-picker-failures";
     const FLAT_PICKER_TRIGGER_SELECTOR = 'button, [role="button"], [aria-haspopup="menu"]';
-    const FLAT_PICKER_VERSION = "1.8.0";
+    const FLAT_PICKER_VERSION = "2.0.0";
     const ACTIVITY_CHANNEL_NAME = "codex-pokedex-pet-activity-v1";
     const SETTINGS_STORAGE_KEY = "codex-plus-pro-settings-v1";
     const CUSTOM_WALLPAPER_STORAGE_KEY = "codex-plus-pro-wallpaper-v1";
@@ -3167,7 +1556,7 @@ function buildInjectionSource(css) {
     const OFFICIAL_UPGRADE_BINDING = "__codexPlusProOfficialUpgrade";
     const VERSION_CHECK_BINDING = "__codexPlusProVersionCheck";
     const MANAGED_VERSION_CLEANUP_BINDING = "__codexPlusProManagedVersionCleanup";
-    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.7-taskboard-service-compatibility-v2";
+    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.8-service-extensions-v3";
     const VERSION_INFO = ${JSON.stringify(hostVersionInfo)};
     const FEATURE_ATTRIBUTES = {
       theme: "data-codex-plus-theme",
@@ -3195,12 +1584,36 @@ function buildInjectionSource(css) {
       try { window.__codexPlusProSettingsChannel?.close(); } catch {}
       window.__codexPlusProSettingsChannel = null;
     }
+    const syncNativeDarkThemeClass = () => {
+      const root = document.documentElement;
+      if (!root) return;
+      const nativeTheme = String(root.getAttribute(HOST_THEME_ATTRIBUTE) || "").toLowerCase();
+      if (nativeTheme === "dark") {
+        if (!root.classList.contains(DARK_THEME_CLASS)) {
+          root.classList.add(DARK_THEME_CLASS);
+          root.setAttribute(DARK_THEME_COMPAT_ATTRIBUTE, "on");
+        }
+        return;
+      }
+      if (root.getAttribute(DARK_THEME_COMPAT_ATTRIBUTE) === "on") {
+        root.classList.remove(DARK_THEME_CLASS);
+        root.removeAttribute(DARK_THEME_COMPAT_ATTRIBUTE);
+      }
+    };
     document.querySelector(".codex-plus-pro-settings-button")?.remove();
     document.querySelector(".codex-plus-pro-settings-popover")?.remove();
     document.querySelector(".codex-plus-pro-settings-backdrop")?.remove();
     document.querySelector(".codex-plus-pro-confirm-backdrop")?.remove();
-    for (const element of document.querySelectorAll(".codex-pokedex-flat-picker")) {
-      element.remove();
+    document.documentElement?.removeAttribute("data-codex-plus-model-picker");
+    document.documentElement?.removeAttribute("data-codex-pokedex-flat-picker");
+    for (const element of document.querySelectorAll(
+      ".codex-pokedex-flat-picker, [data-codex-pokedex-flat-picker-surface], [data-codex-pokedex-flat-picker-failures]",
+    )) {
+      if (element.matches(".codex-pokedex-flat-picker")) element.remove();
+      else {
+        element.removeAttribute("data-codex-pokedex-flat-picker-surface");
+        element.removeAttribute("data-codex-pokedex-flat-picker-failures");
+      }
     }
     for (const element of document.querySelectorAll("[" + COMPOSER_ATTRIBUTE + "]")) {
       element.removeAttribute(COMPOSER_ATTRIBUTE);
@@ -3209,22 +1622,14 @@ function buildInjectionSource(css) {
       element.style.removeProperty("border-style");
       element.style.removeProperty("border-color");
     }
+    for (const element of document.querySelectorAll("[" + APPROVAL_SURFACE_ATTRIBUTE + "]")) {
+      element.removeAttribute(APPROVAL_SURFACE_ATTRIBUTE);
+    }
     for (const element of document.querySelectorAll("[" + TASK_STATUS_ATTRIBUTE + "]")) {
       element.removeAttribute(TASK_STATUS_ATTRIBUTE);
       element.removeAttribute(TASK_STATUS_STATE_ATTRIBUTE);
     }
     const SETTINGS_ICON = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>';
-    const DEFAULT_MODEL_OPTIONS = ["5.6 Sol", "5.6 Terra", "5.6 Luna", "5.5", "5.3 Codex Spark"];
-    const DEFAULT_EFFORT_OPTIONS = ["Light", "Medium", "High", "Extra High", "Max", "Ultra"];
-    const EFFORT_LABEL_BY_CODE = {
-      minimal: "Light",
-      low: "Light",
-      medium: "Medium",
-      high: "High",
-      xhigh: "Extra High",
-      max: "Max",
-      ultra: "Ultra",
-    };
     const DEFAULT_FEATURE_SETTINGS = {
       theme: true,
       pet: true,
@@ -3586,22 +1991,9 @@ function buildInjectionSource(css) {
       reader.readAsDataURL(file);
     });
     let featureSettings = readFeatureSettings();
-    let taskboardServiceState = {
-      state: "unknown",
-      available: false,
-      healthy: false,
-      reason: "尚未检测任务面板服务。",
-      root: "",
-      port: null,
-      url: "",
-      nodePath: "",
-      processId: null,
-      statePreserved: false,
-    };
-    let taskboardServiceRequestPromise = null;
     let hotkeyServicesPromise = null;
     let refreshFrame = 0;
-    const COMPATIBILITY_CHECKLIST_VERSION = "ui-compatibility-v1";
+    const COMPATIBILITY_CHECKLIST_VERSION = "ui-compatibility-v2";
     const COMPATIBILITY_CATEGORIES = Object.freeze([
       { key: "all", label: "全部" },
       { key: "global", label: "全局" },
@@ -3646,10 +2038,12 @@ function buildInjectionSource(css) {
         id: "global.sidebar",
         category: "global",
         label: "左侧导航",
-        description: "项目、会话和任务面板所在的侧边导航。",
+        description: "新版窄导航 rail、项目和会话面板所在的侧边导航。",
         anchors: [
-          { name: "app-shell-sidebar", selector: ".app-shell-left-panel" },
-          { name: "sidebar-navigation", selector: "nav.sidebar-foreground-muted" },
+          { name: "app-shell-sidebar", selector: "#app-shell-sidebar" },
+          { name: "navigation-rail", selector: '[data-app-navigation-rail="true"]' },
+          { name: "sidebar-navigation", selector: ".sidebar-navigation" },
+          { name: "legacy-app-shell-sidebar", selector: ".app-shell-left-panel" },
         ],
         fallbackAttribute: "data-codex-plus-compat-sidebar",
         risk: "high",
@@ -3700,6 +2094,9 @@ function buildInjectionSource(css) {
         description: "输入框、发送按钮和输入区工具栏的主题外壳。",
         anchors: [
           { name: "utility-bar", selector: "[data-composer-utility-bar-scroll-area]" },
+          { name: "composer-root", selector: "[data-codex-composer-root]" },
+          { name: "composer-surface", selector: ".composer-surface-chrome" },
+          { name: "responsive-footer", selector: "[data-composer-footer-responsive]" },
           { name: "contenteditable", selector: '[contenteditable="true"]' },
           { name: "role-textbox", selector: '[role="textbox"]' },
         ],
@@ -3707,6 +2104,21 @@ function buildInjectionSource(css) {
         fallbackAttribute: "data-codex-plus-compat-composer",
         risk: "high",
         repair: "reapply-and-enable-fallback",
+      },
+      {
+        id: "conversation.model-picker",
+        category: "conversation",
+        label: "模型栏",
+        description: "新版 composer footer 中由 Codex 原生状态驱动的主题模型、思考强度和快速模式控制。",
+        anchors: [
+          { name: "themed-model-bar", selector: ".codex-pokedex-flat-picker" },
+          { name: "intelligence-trigger", selector: 'button[data-codex-intelligence-trigger="true"]' },
+          { name: "model-trigger-content", selector: '[class*="ModelPickerTriggerContent"]' },
+          { name: "model-label", selector: '[class*="ModelPickerTriggerModelLabel"]' },
+        ],
+        styleProbe: "native-model-picker",
+        risk: "medium",
+        repair: "reapply",
       },
       {
         id: "conversation.utility-bar",
@@ -3800,7 +2212,7 @@ function buildInjectionSource(css) {
         id: "settings.navigation",
         category: "settings",
         label: "设置分区导航",
-        description: "主题、模型栏、任务面板和兼容性分区导航。",
+        description: "主题、模型栏、宠物、兼容性和版本分区导航。",
         anchors: [
           { name: "settings-navigation", selector: ".codex-plus-pro-settings-navigation" },
           { name: "settings-tab", selector: "[data-settings-section-target]" },
@@ -3819,18 +2231,6 @@ function buildInjectionSource(css) {
           { name: "settings-section", selector: "[data-settings-section]" },
         ],
         styleProbe: "settings-popover",
-        risk: "medium",
-        repair: "reapply",
-      },
-      {
-        id: "settings.taskboard-service",
-        category: "settings",
-        label: "Taskboard 服务控制区",
-        description: "任务面板服务状态、重新检测、重启和诊断控件。",
-        anchors: [
-          { name: "taskboard-service", selector: ".codex-plus-pro-taskboard-service-control" },
-          { name: "taskboard-service-marker", selector: '[data-taskboard-service-control="true"]' },
-        ],
         risk: "medium",
         repair: "reapply",
       },
@@ -3891,6 +2291,38 @@ function buildInjectionSource(css) {
       if (item.styleProbe === "composer-surface") {
         const ok = Boolean(document.querySelector("[" + COMPOSER_ATTRIBUTE + "]"));
         return { ok, reason: ok ? "输入区已完成主题装饰" : "输入区主题装饰标记缺失" };
+      }
+      if (item.styleProbe === "native-model-picker") {
+        const trigger = document.querySelector('button[data-codex-intelligence-trigger="true"]');
+        const nativeRect = trigger?.getBoundingClientRect();
+        const nativeVisible = trigger && getComputedStyle(trigger).visibility !== "hidden";
+        const themedBar = document.querySelector(".codex-pokedex-flat-picker");
+        const themedRect = themedBar?.getBoundingClientRect();
+        const themedVisible = themedBar && getComputedStyle(themedBar).visibility !== "hidden";
+        const nativeOk = Boolean(
+          trigger &&
+          trigger.getAttribute("aria-haspopup") === "menu" &&
+          nativeVisible &&
+          nativeRect &&
+          nativeRect.width >= 40 &&
+          nativeRect.height >= 20,
+        );
+        const themedOk = Boolean(
+          themedBar &&
+          themedVisible &&
+          themedRect &&
+          themedRect.width >= 180 &&
+          themedRect.height >= 20,
+        );
+        const ok = nativeOk || themedOk;
+        return {
+          ok,
+          reason: nativeOk
+            ? "原生模型和思考强度触发器可见"
+            : themedOk
+              ? "主题模型栏可见并连接到原生状态"
+              : "模型栏触发器或主题模型栏缺失、不可见",
+        };
       }
       if (item.styleProbe === "settings-popover") {
         const popover = document.querySelector(".codex-plus-pro-settings-popover");
@@ -3997,13 +2429,13 @@ function buildInjectionSource(css) {
       ? previousFlatPickerState
       : {
           version: FLAT_PICKER_VERSION,
-          modelOptions: [...DEFAULT_MODEL_OPTIONS],
-          effortOptions: [...DEFAULT_EFFORT_OPTIONS],
+          modelOptions: ["5.6 Sol", "5.6 Terra", "5.6 Luna", "5.5", "5.3 Codex Spark"],
+          effortOptions: ["Light", "Medium", "High", "Extra High", "Max", "Ultra"],
           availableEfforts: [],
           operationActive: false,
         };
     flatPickerState.operationActive = false;
-    flatPickerState.effortOptions = [...DEFAULT_EFFORT_OPTIONS];
+    flatPickerState.effortOptions = ["Light", "Medium", "High", "Extra High", "Max", "Ultra"];
     window.__codexPokedexFlatPickerState = flatPickerState;
 
     // Theme + model picker + pet (Scope B2; PiP retired).
@@ -4011,7 +2443,6 @@ function buildInjectionSource(css) {
       { key: "theme", label: "主题", feature: "theme" },
       { key: "modelPicker", label: "模型栏", feature: "modelPicker" },
       { key: "pet", label: "宠物", feature: "pet" },
-      { key: "taskboard", label: "任务面板", feature: "taskboard" },
       { key: "compatibility", label: "界面兼容性", feature: "compatibility" },
       { key: "version", label: "版本", feature: "version" },
     ];
@@ -4378,244 +2809,6 @@ function buildInjectionSource(css) {
     };
     window.__codexPlusProVersionCheckResult = updateVersionCheckControls;
 
-    const taskboardServiceLabel = (state) => ({
-      healthy: "运行正常",
-      stopped: "服务未运行",
-      unhealthy: "进程存在但健康检查失败",
-      unavailable: "Taskboard 不可用",
-      disabled: "Taskboard 已禁用",
-      restarting: "正在重启",
-      "restart-failed": "重启失败",
-      loading: "正在读取",
-      unknown: "尚未检测",
-    }[state] || "状态未知");
-
-    const normalizeTaskboardServiceState = (value = {}) => ({
-      state: String(value.state || "unknown"),
-      available: value.available === true,
-      healthy: value.healthy === true,
-    reason: String(value.reason || "暂无诊断原因"),
-    root: String(value.root || ""),
-    port: Number.isInteger(Number(value.port)) && Number(value.port) > 0 ? Number(value.port) : null,
-    url: String(value.url || ""),
-    nodePath: String(value.nodePath || ""),
-    processId: Number.isInteger(Number(value.processId)) && Number(value.processId) > 0 ? Number(value.processId) : null,
-      statePreserved: value.statePreserved === true,
-    });
-
-    const safeTaskboardServiceUrl = (value) => {
-      try {
-        const url = new URL(String(value || ""));
-        return url.origin;
-      } catch {
-        return "";
-      }
-    };
-
-    const taskboardServiceDiagnosticText = () => {
-      const service = taskboardServiceState;
-      return [
-        "Codex Plus Pro Taskboard 诊断",
-        "状态: " + taskboardServiceLabel(service.state),
-        "原因: " + service.reason,
-        "端口: " + (service.port ?? "未知"),
-        "PID: " + (service.processId ?? "未知"),
-        "Taskboard 根目录: " + (service.root || "未知"),
-        "Node.js: " + (service.nodePath || "未知"),
-        "服务地址: " + (safeTaskboardServiceUrl(service.url) || "未知"),
-        "状态保留: " + (service.statePreserved ? "是" : "否"),
-      ].join("\\n");
-    };
-
-    const renderTaskboardServiceControls = (payload = {}) => {
-      if (payload.service) taskboardServiceState = normalizeTaskboardServiceState(payload.service);
-      const service = taskboardServiceState;
-      for (const control of document.querySelectorAll("[data-taskboard-service-control='true']")) {
-        const badge = control.querySelector("[data-taskboard-service-badge]");
-        const reason = control.querySelector("[data-taskboard-service-reason]");
-        const refreshButton = control.querySelector("[data-taskboard-service-refresh]");
-        const restartButton = control.querySelector("[data-taskboard-service-restart]");
-        const copyButton = control.querySelector("[data-taskboard-service-copy]");
-        const detail = control.querySelector("[data-taskboard-service-detail]");
-        const state = payload.state || service.state;
-        control.setAttribute("data-service-state", state);
-        if (badge) badge.textContent = payload.status || taskboardServiceLabel(state);
-        if (reason) reason.textContent = payload.detail || service.reason;
-        if (refreshButton) {
-          refreshButton.disabled = state === "restarting" || state === "loading";
-          refreshButton.textContent = state === "restarting" || state === "loading" ? "处理中..." : "重新检测";
-        }
-        if (restartButton) {
-          restartButton.disabled = state === "restarting" || state === "loading";
-          restartButton.textContent = state === "restarting" ? "重启中..." : "重启 Taskboard";
-        }
-        if (copyButton) copyButton.disabled = state === "restarting" || state === "loading";
-        if (detail) {
-          detail.replaceChildren(
-            createSettingsTextValue(
-              "端口 " + (service.port ?? "未知") + " · PID " + (service.processId ?? "未运行"),
-              [service.root, safeTaskboardServiceUrl(service.url)].filter(Boolean).join(" · ") || "暂无安全诊断路径",
-            ),
-          );
-        }
-      }
-    };
-
-    const applyTaskboardServiceResponse = (response) => {
-      renderTaskboardServiceControls(response || {});
-      return response;
-    };
-
-    const requestTaskboardServiceFromSettings = async (operation = "status") => {
-      if (taskboardServiceRequestPromise) return taskboardServiceRequestPromise;
-      const bridge = window.__codexPlusProTaskboardService;
-      if (!bridge || typeof bridge.request !== "function") {
-        taskboardServiceState = {
-          ...taskboardServiceState,
-          state: "unavailable",
-          reason: "没有拿到 Taskboard 宿主控制入口，请重新启动 Codex Plus Pro。",
-        };
-        renderTaskboardServiceControls({
-          state: "unknown",
-          status: "宿主未连接",
-          detail: "没有拿到 Taskboard 宿主控制入口，请重新启动 Codex Plus Pro。",
-        });
-        return null;
-      }
-      taskboardServiceRequestPromise = (async () => {
-        renderTaskboardServiceControls({
-          state: operation === "restart" ? "restarting" : "loading",
-          status: operation === "restart" ? "正在重启" : "正在读取",
-          detail: operation === "restart" ? "正在由 Codex 启动器重启 Taskboard，请稍候。" : "正在读取本机 Taskboard 服务状态。",
-        });
-        try {
-          const response = await bridge.request(operation);
-          return applyTaskboardServiceResponse(response);
-        } catch (error) {
-          taskboardServiceState = {
-            ...taskboardServiceState,
-            state: "unavailable",
-            reason: error?.message || "无法读取 Taskboard 服务状态。",
-          };
-          renderTaskboardServiceControls({
-            state: operation === "restart" ? "restart-failed" : "unavailable",
-            status: operation === "restart" ? "重启失败" : "读取失败",
-            detail: error?.message || (operation === "restart" ? "无法重启 Taskboard 服务。" : "无法读取 Taskboard 服务状态。"),
-          });
-          return null;
-        } finally {
-          taskboardServiceRequestPromise = null;
-        }
-      })();
-      return taskboardServiceRequestPromise;
-    };
-
-    const createTaskboardServiceControl = () => {
-      const control = document.createElement("div");
-      control.className = "codex-plus-pro-taskboard-service-control";
-      control.setAttribute("data-taskboard-service-control", "true");
-      control.setAttribute("data-service-state", taskboardServiceState.state);
-
-      const summary = document.createElement("div");
-      summary.className = "codex-plus-pro-taskboard-service-summary";
-      const badge = document.createElement("span");
-      badge.className = "codex-plus-pro-taskboard-service-badge";
-      badge.setAttribute("data-taskboard-service-badge", "true");
-      const reason = document.createElement("span");
-      reason.className = "codex-plus-pro-taskboard-service-reason";
-      reason.setAttribute("data-taskboard-service-reason", "true");
-      summary.append(badge, reason);
-
-      const detail = document.createElement("div");
-      detail.className = "codex-plus-pro-taskboard-service-detail";
-      detail.setAttribute("data-taskboard-service-detail", "true");
-
-      const actions = document.createElement("div");
-      actions.className = "codex-plus-pro-taskboard-service-actions";
-      const refreshButton = document.createElement("button");
-      refreshButton.type = "button";
-      refreshButton.className = "codex-plus-pro-settings-upgrade";
-      refreshButton.setAttribute("data-taskboard-service-refresh", "true");
-      refreshButton.textContent = "重新检测";
-      refreshButton.addEventListener("click", () => void requestTaskboardServiceFromSettings("status"));
-      const restartButton = document.createElement("button");
-      restartButton.type = "button";
-      restartButton.className = "codex-plus-pro-settings-upgrade codex-plus-pro-taskboard-service-restart";
-      restartButton.setAttribute("data-taskboard-service-restart", "true");
-      restartButton.textContent = "重启 Taskboard";
-      restartButton.addEventListener("click", () => showTaskboardServiceConfirm(() => {
-        void requestTaskboardServiceFromSettings("restart");
-      }));
-      const copyButton = document.createElement("button");
-      copyButton.type = "button";
-      copyButton.className = "codex-plus-pro-settings-upgrade";
-      copyButton.setAttribute("data-taskboard-service-copy", "true");
-      copyButton.textContent = "复制诊断";
-      copyButton.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(taskboardServiceDiagnosticText());
-          copyButton.textContent = "已复制";
-          window.setTimeout(() => { copyButton.textContent = "复制诊断"; }, 1_500);
-        } catch {
-          copyButton.textContent = "复制失败";
-        }
-      });
-      actions.append(refreshButton, restartButton, copyButton);
-      control.append(summary, detail, actions);
-      renderTaskboardServiceControls();
-      return control;
-    };
-
-    const showTaskboardServiceConfirm = (onConfirm) => {
-      document.querySelector(".codex-plus-pro-confirm-backdrop")?.remove();
-      const backdrop = document.createElement("div");
-      backdrop.className = "codex-plus-pro-confirm-backdrop";
-      const dialog = document.createElement("div");
-      dialog.className = "codex-plus-pro-confirm-dialog";
-      dialog.setAttribute("role", "dialog");
-      dialog.setAttribute("aria-modal", "true");
-      dialog.setAttribute("aria-label", "确认重启 Taskboard");
-      const header = document.createElement("div");
-      header.className = "codex-plus-pro-confirm-header";
-      const title = document.createElement("div");
-      title.className = "codex-plus-pro-confirm-title";
-      title.textContent = "确认重启 Taskboard";
-      header.appendChild(title);
-      const body = document.createElement("div");
-      body.className = "codex-plus-pro-confirm-body";
-      const message = document.createElement("div");
-      message.className = "codex-plus-pro-confirm-message";
-      message.textContent = "重启期间任务面板会短暂不可用。";
-      const detail = document.createElement("div");
-      detail.className = "codex-plus-pro-confirm-detail";
-      detail.textContent = "Codex 启动器会复用现有配置并执行安全重启，不会清空任务数据。";
-      body.append(message, detail);
-      const footer = document.createElement("div");
-      footer.className = "codex-plus-pro-confirm-footer";
-      const cancelButton = document.createElement("button");
-      cancelButton.type = "button";
-      cancelButton.className = "codex-plus-pro-confirm-cancel";
-      cancelButton.textContent = "取消";
-      const confirmButton = document.createElement("button");
-      confirmButton.type = "button";
-      confirmButton.className = "codex-plus-pro-confirm-action";
-      confirmButton.textContent = "确认重启";
-      footer.append(cancelButton, confirmButton);
-      dialog.append(header, body, footer);
-      backdrop.appendChild(dialog);
-      document.body.appendChild(backdrop);
-      const close = () => {
-        document.removeEventListener("keydown", onKeyDown);
-        backdrop.remove();
-      };
-      const onKeyDown = (event) => { if (event.key === "Escape") close(); };
-      cancelButton.addEventListener("click", close);
-      confirmButton.addEventListener("click", () => { close(); onConfirm(); });
-      backdrop.addEventListener("click", (event) => { if (event.target === backdrop) close(); });
-      document.addEventListener("keydown", onKeyDown);
-      cancelButton.focus({ preventScroll: true });
-    };
-
     const createOfficialUpgradeControl = () => {
       const isAvailable = VERSION_INFO.updateState === "outdated";
       const control = document.createElement("div");
@@ -4962,7 +3155,6 @@ function buildInjectionSource(css) {
       for (const panel of popover.querySelectorAll("[data-settings-section]")) {
         panel.hidden = panel.getAttribute("data-settings-section") !== sectionKey;
       }
-      if (sectionKey === "taskboard") void requestTaskboardServiceFromSettings("status");
       if (sectionKey === "compatibility") refreshCompatibilityPanel();
     };
 
@@ -5022,7 +3214,6 @@ function buildInjectionSource(css) {
       if (button && popover) button.setAttribute("aria-expanded", popover.hidden ? "false" : "true");
       const backdrop = document.querySelector(".codex-plus-pro-settings-backdrop");
       if (backdrop && popover) backdrop.hidden = popover.hidden;
-      renderTaskboardServiceControls();
     };
 
     const closeSettingsPopover = () => {
@@ -5062,7 +3253,7 @@ function buildInjectionSource(css) {
       title.textContent = "Codex Plus Pro";
       const subtitle = document.createElement("div");
       subtitle.className = "codex-plus-pro-settings-subtitle";
-      subtitle.textContent = "Windows 1.8.7 · 主题、模型栏、官方宠物开关、导航对比度、兼容性清单与 MSIX";
+      subtitle.textContent = "Windows 1.8.8 · 主题启动动画、官方宠物开关、兼容性清单与 MSIX";
       heading.append(title, subtitle);
       const closeButton = document.createElement("button");
       closeButton.type = "button";
@@ -5248,10 +3439,6 @@ function buildInjectionSource(css) {
           });
           rangeControl.append(range, output);
           panel.appendChild(createSettingsRow("壁纸强度", rangeControl));
-        } else if (item.key === "taskboard") {
-          panel.append(
-            createSettingsRow("服务", createTaskboardServiceControl()),
-          );
         } else if (item.key === "compatibility") {
           panel.appendChild(createCompatibilityPanel());
         } else if (item.key === "version") {
@@ -5695,22 +3882,15 @@ function buildInjectionSource(css) {
       }
     };
 
-    const waitForPageCondition = (predicate, timeout = 1200) => new Promise((resolve, reject) => {
-      const startedAt = performance.now();
-      const check = () => {
-        const result = predicate();
-        if (result) {
-          resolve(result);
-          return;
-        }
-        if (performance.now() - startedAt >= timeout) {
-          reject(new Error("Timed out waiting for Codex to update the model settings"));
-          return;
-        }
-        window.setTimeout(check, 16);
-      };
-      check();
-    });
+    const EFFORT_LABEL_BY_CODE = {
+      minimal: "Light",
+      low: "Light",
+      medium: "Medium",
+      high: "High",
+      xhigh: "Extra High",
+      max: "Max",
+      ultra: "Ultra",
+    };
 
     const modelLabelFromOption = (option) => {
       const label = String(option?.displayName || option?.model || "")
@@ -5721,18 +3901,23 @@ function buildInjectionSource(css) {
       return label || String(option?.model || "");
     };
 
+    const isModelPickerProps = (props) => {
+      const canSelectModel = typeof props?.onSelectModel === "function";
+      const canSelectEffort = typeof props?.onSelectReasoningEffort === "function" ||
+        typeof props?.onSelectPower === "function" ||
+        (canSelectModel && Array.isArray(props?.powerSelections));
+      return Array.isArray(props?.models) && canSelectModel && canSelectEffort;
+    };
+
     const findModelPickerInterface = (trigger) => {
-      const fiberKey = Object.keys(trigger || {}).find((key) => key.startsWith("__reactFiber$"));
+      if (!(trigger instanceof HTMLElement)) return null;
+      for (const key of Object.keys(trigger)) {
+        if (key.startsWith("__reactProps$") && isModelPickerProps(trigger[key])) return trigger[key];
+      }
+      const fiberKey = Object.keys(trigger).find((key) => key.startsWith("__reactFiber$"));
       let fiber = fiberKey ? trigger[fiberKey] : null;
       for (let depth = 0; fiber && depth < 80; depth += 1, fiber = fiber.return) {
-        const props = fiber.memoizedProps;
-        if (
-          Array.isArray(props?.models) &&
-          typeof props.onSelectModel === "function" &&
-          typeof props.onSelectReasoningEffort === "function"
-        ) {
-          return props;
-        }
+        if (isModelPickerProps(fiber.memoizedProps)) return fiber.memoizedProps;
       }
       return null;
     };
@@ -5768,33 +3953,18 @@ function buildInjectionSource(css) {
         const fastTier = picker.serviceTierOptions?.find((option) => option.iconKind === "fast");
         return {
           model: modelLabelFromOption(selectedModel) || picker.model,
-          effort: EFFORT_LABEL_BY_CODE[picker.reasoningEffort] || picker.reasoningEffort,
+          effort: EFFORT_LABEL_BY_CODE[picker.reasoningEffort] || picker.reasoningEffort || "",
           fast: fastTier != null && picker.selectedServiceTier === fastTier.value,
         };
       }
-      const visibleContent = Array.from(trigger?.children || []).find((child) =>
-        child.tagName !== "svg" && child.getAttribute("aria-hidden") !== "true"
-      );
-      const modelText = visibleContent
-        ?.querySelector('[class*="ModelPickerTriggerModelText"]')
-        ?.textContent
-        ?.trim();
-      const effortText = visibleContent
-        ?.querySelector('[class*="ModelPickerTriggerEffortLabel"]')
-        ?.textContent
-        ?.trim();
-      const visibleText = visibleContent?.textContent?.trim() || "";
+      const visibleText = String(trigger?.textContent || "").replace(/\s+/g, " ").trim();
       const knownModel = [...flatPickerState.modelOptions]
         .sort((left, right) => right.length - left.length)
-        .find((model) => visibleText.startsWith(model));
-      const effortCode = trigger?.getAttribute("data-selected-reasoning-effort") || "";
+        .find((model) => visibleText.includes(model));
       return {
-        model: modelText || knownModel || flatPickerState.modelOptions[0],
-        effort: EFFORT_LABEL_BY_CODE[effortCode] || effortText || "",
-        fast: Boolean(
-          trigger?.querySelector('[class*="InlineFastIcon"]') ||
-          visibleContent?.querySelector("svg")
-        ),
+        model: knownModel || flatPickerState.modelOptions[0],
+        effort: "",
+        fast: false,
       };
     };
 
@@ -5802,14 +3972,10 @@ function buildInjectionSource(css) {
       const group = document.createElement("div");
       group.className = "codex-pokedex-flat-picker-group";
       group.setAttribute("data-flat-picker-group", kind);
-
       const segments = document.createElement("div");
       segments.className = "codex-pokedex-flat-picker-segments";
-      if (kind !== "speed") {
-        segments.setAttribute("role", "radiogroup");
-        segments.setAttribute("aria-label", kind === "model" ? "模型" : "思考强度");
-      }
-
+      segments.setAttribute("role", kind === "speed" ? "group" : "radiogroup");
+      segments.setAttribute("aria-label", kind === "model" ? "模型" : kind === "effort" ? "思考强度" : "快速模式");
       for (const option of options) {
         const button = document.createElement("button");
         button.type = "button";
@@ -5829,7 +3995,6 @@ function buildInjectionSource(css) {
           text.textContent = "Fast";
           const track = document.createElement("span");
           track.className = "codex-pokedex-flat-picker-switch-track";
-          track.setAttribute("aria-hidden", "true");
           const thumb = document.createElement("span");
           thumb.className = "codex-pokedex-flat-picker-switch-thumb";
           track.appendChild(thumb);
@@ -5837,7 +4002,6 @@ function buildInjectionSource(css) {
           button.title = "快速模式";
           button.setAttribute("role", "switch");
           button.setAttribute("aria-label", "快速模式");
-          button.setAttribute("aria-checked", "false");
         }
         segments.appendChild(button);
       }
@@ -5846,10 +4010,7 @@ function buildInjectionSource(css) {
     };
 
     const renderFlatPickerStructure = (bar) => {
-      const signature = JSON.stringify({
-        models: flatPickerState.modelOptions,
-        efforts: flatPickerState.effortOptions,
-      });
+      const signature = JSON.stringify({ models: flatPickerState.modelOptions, efforts: flatPickerState.effortOptions });
       if (bar.getAttribute("data-flat-picker-signature") === signature) return;
       bar.replaceChildren(
         createFlatPickerGroup("model", flatPickerState.modelOptions),
@@ -5865,70 +4026,67 @@ function buildInjectionSource(css) {
       syncFlatPickerOptions(picker);
       renderFlatPickerStructure(bar);
       const selection = readPickerSelection(trigger, picker);
-      const running = surface.querySelector('button[aria-label="Stop"]') != null;
-      const globallyDisabled = running || trigger.disabled || flatPickerState.operationActive || picker == null;
+      const running = Array.from(surface.querySelectorAll("button")).some(isComposerStopButton);
       const fastTier = picker?.serviceTierOptions?.find((option) => option.iconKind === "fast");
-
-      bar.setAttribute("data-flat-picker-model", selection.model);
-      bar.setAttribute("data-flat-picker-effort", selection.effort);
+      const disabled = running || trigger.disabled || flatPickerState.operationActive || picker == null;
+      bar.setAttribute("data-flat-picker-model", selection.model || "");
+      bar.setAttribute("data-flat-picker-effort", selection.effort || "");
       bar.setAttribute("data-flat-picker-fast", selection.fast ? "on" : "off");
-      bar.setAttribute("data-flat-picker-disabled", globallyDisabled ? "on" : "off");
+      bar.setAttribute("data-flat-picker-disabled", disabled ? "on" : "off");
       bar.setAttribute("aria-busy", flatPickerState.operationActive ? "true" : "false");
-
       for (const button of bar.querySelectorAll("button[data-flat-picker-kind]")) {
         const kind = button.getAttribute("data-flat-picker-kind");
         const value = button.getAttribute("data-flat-picker-value");
-        let selected = false;
-        let unavailable = false;
-
-        if (kind === "model") {
-          selected = value === selection.model;
-          button.setAttribute("aria-checked", selected ? "true" : "false");
-        } else if (kind === "effort") {
-          selected = value === selection.effort;
-          unavailable = !flatPickerState.availableEfforts.includes(value) && !selected;
-          button.setAttribute("aria-checked", selected ? "true" : "false");
-          button.title = unavailable ? "当前模型不支持该思考强度" : "思考强度：" + value;
-        } else {
-          selected = selection.fast;
-          unavailable = fastTier == null || typeof picker?.onSelectServiceTier !== "function";
-          button.setAttribute("aria-checked", selected ? "true" : "false");
-        }
-
+        const selected = kind === "model"
+          ? value === selection.model
+          : kind === "effort" ? value === selection.effort : selection.fast;
+        const unavailable = kind === "effort"
+          ? !flatPickerState.availableEfforts.includes(value) && !selected
+          : kind === "speed" && (fastTier == null || typeof picker?.onSelectServiceTier !== "function");
+        button.setAttribute("aria-checked", selected ? "true" : "false");
         button.setAttribute("data-selected", selected ? "true" : "false");
         button.setAttribute("data-unavailable", unavailable ? "true" : "false");
-        button.disabled = globallyDisabled || unavailable;
+        button.disabled = disabled || unavailable;
+        if (unavailable) button.title = "当前模型不支持该选项";
       }
     };
 
-    const normalizeFlatPickerText = (value) => String(value || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
+    const normalizeFlatPickerText = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
 
     const isLikelyFlatPickerTrigger = (button) => {
-      if (!(button instanceof HTMLElement)) return false;
-      if (button.matches('[aria-disabled="true"]')) return false;
+      if (!(button instanceof HTMLElement) || button.matches('[aria-disabled="true"]')) return false;
       if (button.matches('button[data-codex-intelligence-trigger="true"]')) return true;
-
-      const pickerInterface = findModelPickerInterface(button);
-      if (pickerInterface) return true;
-
+      if (findModelPickerInterface(button)) return true;
       const visibleText = normalizeFlatPickerText(button.textContent);
-      return DEFAULT_MODEL_OPTIONS.some((modelOption) => (
-        visibleText.includes(normalizeFlatPickerText(modelOption))
-      ));
+      return flatPickerState.modelOptions.some((model) => visibleText.includes(normalizeFlatPickerText(model)));
     };
 
     const findFlatPickerTrigger = (surface) => {
       if (!(surface instanceof HTMLElement)) return null;
-      const buttons = Array.from(surface.querySelectorAll(FLAT_PICKER_TRIGGER_SELECTOR));
-      const trigger = buttons.find(isLikelyFlatPickerTrigger) || null;
-      if (trigger) {
-        // Normalize the official trigger into the project-owned runtime contract.
-        trigger.setAttribute("data-codex-intelligence-trigger", "true");
-      }
+      const native = surface.querySelector('button[data-codex-intelligence-trigger="true"]');
+      if (native) return native;
+      const trigger = Array.from(surface.querySelectorAll(FLAT_PICKER_TRIGGER_SELECTOR)).find(isLikelyFlatPickerTrigger) || null;
+      if (trigger) trigger.setAttribute("data-codex-intelligence-trigger", "true");
       return trigger;
+    };
+
+    const findFlatPickerSurface = (trigger) => {
+      if (!(trigger instanceof HTMLElement)) return null;
+      const marked = trigger.closest("[" + FLAT_PICKER_SURFACE_ATTRIBUTE + '=\"on\"]');
+      if (marked) return marked;
+      const footer = trigger.closest("[data-composer-footer-responsive]");
+      const root = footer?.closest(
+        ".composer-surface-chrome, [data-codex-composer-root], [class*='ComposerLayoutRoot'], form",
+      );
+      const candidate = root || footer || trigger.closest(".composer-surface-chrome, [data-codex-composer='true'], form");
+      if (candidate && candidate !== document.body && candidate !== document.documentElement) return candidate;
+      let parent = trigger.parentElement;
+      for (let depth = 0; parent && depth < 14; depth += 1, parent = parent.parentElement) {
+        if (parent.querySelector('[contenteditable="true"], textarea, button[aria-label="Send"], button[aria-label="Submit"], button[aria-label="Stop"]')) {
+          return parent;
+        }
+      }
+      return null;
     };
 
     const withModelPickerInterface = async (surface, callback) => {
@@ -5937,15 +4095,39 @@ function buildInjectionSource(css) {
       const bar = surface.querySelector(".codex-pokedex-flat-picker");
       updateFlatPicker(bar, findFlatPickerTrigger(surface), surface);
       try {
-        const trigger = findFlatPickerTrigger(surface);
-        const picker = findModelPickerInterface(trigger);
+        const picker = findModelPickerInterface(findFlatPickerTrigger(surface));
         if (!picker) throw new Error("Codex model settings interface was not found");
         return await callback(picker);
       } finally {
         flatPickerState.operationActive = false;
-        const liveTrigger = findFlatPickerTrigger(surface);
-        updateFlatPicker(bar, liveTrigger, surface);
+        updateFlatPicker(bar, findFlatPickerTrigger(surface), surface);
       }
+    };
+
+    const waitForPageCondition = async (predicate, timeoutMs = 2500) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (predicate()) return;
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
+      if (predicate()) return;
+      throw new Error("Timed out waiting for Codex model picker state");
+    };
+
+    const selectPickerPower = (picker, powerSelection) => {
+      if (typeof picker.onSelectReasoningEffort === "function") {
+        picker.onSelectReasoningEffort(powerSelection.reasoningEffort);
+        return;
+      }
+      if (typeof picker.onSelectPower === "function") {
+        picker.onSelectPower(powerSelection);
+        return;
+      }
+      if (typeof picker.onSelectModel === "function") {
+        picker.onSelectModel(powerSelection.model, powerSelection.reasoningEffort);
+        return;
+      }
+      throw new Error("Option unavailable: Effort " + powerSelection.reasoningEffort);
     };
 
     const selectFlatPickerOption = async (surface, kind, value) => {
@@ -5953,49 +4135,37 @@ function buildInjectionSource(css) {
         if (kind === "Model") {
           const target = picker.models.find((option) => modelLabelFromOption(option) === value);
           if (!target) throw new Error("Option unavailable: Model " + value);
-          const supportedEfforts = target.supportedReasoningEfforts || [];
-          const effort = supportedEfforts.some((option) => option.reasoningEffort === picker.reasoningEffort)
+          const efforts = target.supportedReasoningEfforts || [];
+          const effort = efforts.some((option) => option.reasoningEffort === picker.reasoningEffort)
             ? picker.reasoningEffort
             : target.defaultReasoningEffort;
           picker.onSelectModel(target.model, effort);
           await waitForPageCondition(() => {
-            const live = findModelPickerInterface(
-              findFlatPickerTrigger(surface)
-            );
+            const live = findModelPickerInterface(findFlatPickerTrigger(surface));
             return live?.model === target.model && live?.reasoningEffort === effort;
           });
           return;
         }
-
         if (kind === "Effort") {
           const model = picker.models.find((option) => option.model === picker.model);
-          const target = model?.supportedReasoningEfforts?.find((option) =>
-            EFFORT_LABEL_BY_CODE[option.reasoningEffort] === value
-          );
+          const target = model?.supportedReasoningEfforts?.find((option) => EFFORT_LABEL_BY_CODE[option.reasoningEffort] === value);
           if (!target) throw new Error("Option unavailable: Effort " + value);
-          picker.onSelectReasoningEffort(target.reasoningEffort);
-          await waitForPageCondition(() => {
-            const live = findModelPickerInterface(
-              findFlatPickerTrigger(surface)
-            );
-            return live?.reasoningEffort === target.reasoningEffort;
-          });
+          const powerSelection = picker.powerSelections?.find((option) =>
+            option.model === picker.model && option.reasoningEffort === target.reasoningEffort,
+          ) || {
+            model: picker.model,
+            reasoningEffort: target.reasoningEffort,
+          };
+          selectPickerPower(picker, powerSelection);
+          await waitForPageCondition(() => findModelPickerInterface(findFlatPickerTrigger(surface))?.reasoningEffort === target.reasoningEffort);
           return;
         }
-
         const fastTier = picker.serviceTierOptions?.find((option) => option.iconKind === "fast");
         const standardTier = picker.serviceTierOptions?.find((option) => option.iconKind == null);
-        if (!fastTier || typeof picker.onSelectServiceTier !== "function") {
-          throw new Error("Option unavailable: Speed Fast");
-        }
+        if (!fastTier || typeof picker.onSelectServiceTier !== "function") throw new Error("Option unavailable: Speed Fast");
         const target = picker.selectedServiceTier === fastTier.value ? standardTier?.value ?? null : fastTier.value;
         picker.onSelectServiceTier(target);
-        await waitForPageCondition(() => {
-          const live = findModelPickerInterface(
-            findFlatPickerTrigger(surface)
-          );
-          return live?.selectedServiceTier === target;
-        });
+        await waitForPageCondition(() => findModelPickerInterface(findFlatPickerTrigger(surface))?.selectedServiceTier === target);
       });
     };
 
@@ -6009,27 +4179,14 @@ function buildInjectionSource(css) {
       const nativeKind = kindValue === "model" ? "Model" : kindValue === "effort" ? "Effort" : "Speed";
       const value = button.getAttribute("data-flat-picker-value");
       if (nativeKind !== "Speed" && button.getAttribute("data-selected") === "true") return;
-
       bar.setAttribute("data-flat-picker-working", "on");
       try {
         await selectFlatPickerOption(surface, nativeKind, value);
         surface.removeAttribute(FLAT_PICKER_FAILURE_ATTRIBUTE);
-        const liveTrigger = findFlatPickerTrigger(surface);
-        updateFlatPicker(bar, liveTrigger, surface);
+        updateFlatPicker(bar, findFlatPickerTrigger(surface), surface);
       } catch (error) {
-        console.error("Codex Plus Pro flat picker operation failed", error);
-        const message = String(error?.message || error);
-        if (message.startsWith("Option unavailable:")) {
-          const liveButton = Array.from(bar.querySelectorAll("button[data-flat-picker-kind]")).find((candidate) =>
-            candidate.getAttribute("data-flat-picker-kind") === kindValue &&
-            candidate.getAttribute("data-flat-picker-value") === value
-          );
-          if (liveButton) {
-            liveButton.disabled = true;
-            liveButton.setAttribute("data-unavailable", "true");
-            liveButton.title = "当前模型不支持该选项";
-          }
-        } else if (message !== "Another picker operation is active") {
+        console.error("Codex Plus Pro model picker operation failed", error);
+        if (!String(error?.message || error).startsWith("Option unavailable:") && String(error?.message || error) !== "Another picker operation is active") {
           const failures = Number(surface.getAttribute(FLAT_PICKER_FAILURE_ATTRIBUTE) || 0) + 1;
           surface.setAttribute(FLAT_PICKER_FAILURE_ATTRIBUTE, String(failures));
           bar.setAttribute("data-flat-picker-error", "on");
@@ -6040,64 +4197,17 @@ function buildInjectionSource(css) {
       }
     };
 
-    const findFlatPickerSurface = (trigger) => {
-      if (!(trigger instanceof HTMLElement)) return null;
-
-      const isUsableSurface = (candidate) => (
-        candidate instanceof HTMLElement &&
-        candidate !== document.body &&
-        candidate !== document.documentElement &&
-        document.documentElement.contains(candidate) &&
-        !candidate.closest('[data-codex-pokedex-avatar-overlay="on"]')
-      );
-      const findMarkedSurface = () => {
-        const markedSurface = trigger.closest("[" + FLAT_PICKER_SURFACE_ATTRIBUTE + '=\"on\"]');
-        return isUsableSurface(markedSurface) ? markedSurface : null;
-      };
-      const findKnownSurface = () => {
-        const knownSurface =
-          trigger.closest(".composer-surface-chrome") ||
-          trigger.closest('[data-codex-composer="true"]') ||
-          trigger.closest("form");
-        return isUsableSurface(knownSurface) ? knownSurface : null;
-      };
-      const hasComposerControls = (candidate) => Boolean(
-        candidate.querySelector(
-          'textarea, [contenteditable="true"], button[aria-label="Send"], button[aria-label="Submit"], button[aria-label="Stop"]',
-        ),
-      );
-
-      const markedSurface = findMarkedSurface();
-      if (markedSurface) return markedSurface;
-
-      const knownSurface = findKnownSurface();
-      if (knownSurface) return knownSurface;
-
-      let candidate = trigger.parentElement;
-      for (let depth = 0; candidate && depth < 14; depth += 1, candidate = candidate.parentElement) {
-        if (isUsableSurface(candidate) && hasComposerControls(candidate)) return candidate;
-      }
-      return null;
-    };
-
     const decorateFlatPicker = () => {
       if (isAvatarOverlay || isHotkeyWindow || !featureSettings.modelPicker) return;
-      const processedSurfaces = new Set();
+      const surfaces = new Set();
       for (const button of document.querySelectorAll(FLAT_PICKER_TRIGGER_SELECTOR)) {
         if (!isLikelyFlatPickerTrigger(button)) continue;
-        const trigger = button;
-        const surface = findFlatPickerSurface(trigger);
-        if (!surface) continue;
-        if (processedSurfaces.has(surface)) continue;
-        processedSurfaces.add(surface);
-        trigger.setAttribute("data-codex-intelligence-trigger", "true");
+        const surface = findFlatPickerSurface(button);
+        if (!surface || surfaces.has(surface)) continue;
+        surfaces.add(surface);
         if (surface.scrollTop > 0) surface.scrollTop = 0;
-        surface.removeAttribute(FLAT_PICKER_FALLBACK_ATTRIBUTE);
         let bar = surface.querySelector(".codex-pokedex-flat-picker");
-        if (bar && bar.getAttribute("data-flat-picker-version") !== FLAT_PICKER_VERSION) {
-          bar.remove();
-          bar = null;
-        }
+        if (bar && bar.getAttribute("data-flat-picker-version") !== FLAT_PICKER_VERSION) bar.remove();
         if (!bar) {
           bar = document.createElement("div");
           bar.className = "codex-pokedex-flat-picker";
@@ -6107,7 +4217,7 @@ function buildInjectionSource(css) {
         }
         document.documentElement.setAttribute(FLAT_PICKER_ATTRIBUTE, "on");
         surface.setAttribute(FLAT_PICKER_SURFACE_ATTRIBUTE, "on");
-        updateFlatPicker(bar, trigger, surface);
+        updateFlatPicker(bar, button, surface);
       }
       for (const surface of document.querySelectorAll("[" + FLAT_PICKER_SURFACE_ATTRIBUTE + '=\"on\"]')) {
         const trigger = findFlatPickerTrigger(surface);
@@ -6128,6 +4238,7 @@ function buildInjectionSource(css) {
     };
 
     window.__codexPokedexActivityChannel?.close();
+    // Codex 26.924+ owns the model and reasoning controls in the native composer footer.
     const activityChannel = new BroadcastChannel(ACTIVITY_CHANNEL_NAME);
     window.__codexPokedexActivityChannel = activityChannel;
     window.__codexPlusProSettingsChannel?.close();
@@ -6198,9 +4309,22 @@ function buildInjectionSource(css) {
       }
       if (surface) surface.setAttribute(MAIN_SURFACE_ATTRIBUTE, "on");
 
-      const header = document.querySelector('header[class*="Header"]') ||
-        surface?.querySelector("header") ||
-        document.querySelector("header");
+      const headerCandidates = Array.from(document.querySelectorAll(
+        'header[data-app-shell-titlebar="true"], header[class*="Header"], header',
+      ));
+      const header = headerCandidates.find((candidate) => {
+        if (candidate.closest('[data-codex-pokedex-avatar-overlay="on"]')) return false;
+        const rect = candidate.getBoundingClientRect();
+        const style = getComputedStyle(candidate);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      }) || headerCandidates.find((candidate) =>
+        !candidate.closest('[data-codex-pokedex-avatar-overlay="on"]'),
+      ) || surface?.querySelector("header") || document.querySelector("header");
       for (const current of document.querySelectorAll("[" + HEADER_ATTRIBUTE + "]")) {
         if (current !== header) {
           current.removeAttribute(HEADER_ATTRIBUTE);
@@ -6243,7 +4367,7 @@ function buildInjectionSource(css) {
           // The current utility layer keeps border-width:0!important on the
           // native root. These are the only shell properties that need a
           // lifecycle-scoped inline compatibility override.
-          composer.style.setProperty("border-width", "1.5px", "important");
+          composer.style.setProperty("border-width", "1px", "important");
           composer.style.setProperty("border-style", "solid", "important");
           composer.style.setProperty(
             "border-color",
@@ -6257,6 +4381,72 @@ function buildInjectionSource(css) {
         }
       }
       return surface;
+    };
+
+    const clearApprovalSurfaceMarkers = () => {
+      for (const current of document.querySelectorAll(
+        "[" + APPROVAL_SURFACE_ATTRIBUTE + "],[" + APPROVAL_MCP_ATTRIBUTE + "]",
+      )) {
+        current.removeAttribute(APPROVAL_SURFACE_ATTRIBUTE);
+        current.removeAttribute(APPROVAL_MCP_ATTRIBUTE);
+      }
+    };
+
+    // Native approval cards share a role=alert heading and decision form. The
+    // terminal variant also has a command preview; MCP approvals instead expose
+    // a small server/tool detail block, so identify that path separately.
+    const markApprovalSurfaces = () => {
+      if (isAvatarOverlay || isHotkeyWindow || !featureSettings.theme) {
+        clearApprovalSurfaceMarkers();
+        return;
+      }
+
+      const surfaces = new Map();
+      for (const alert of document.querySelectorAll('[role="alert"]')) {
+        let surface = alert.parentElement;
+        for (let depth = 0; surface && depth < 6; depth += 1, surface = surface.parentElement) {
+          if (!(surface instanceof HTMLElement)) continue;
+          if (surface === document.body || surface === document.documentElement) continue;
+          const form = surface.matches("form") ? surface : surface.querySelector("form");
+          const formCount = surface.querySelectorAll("form").length + (surface.matches("form") ? 1 : 0);
+          if (!form || formCount !== 1) continue;
+          const buttons = Array.from(surface.querySelectorAll("button"));
+          if (buttons.length > 6) continue;
+          const decisionButtons = buttons.filter((button) => {
+            const label = (button.getAttribute("aria-label") || "").trim();
+            const text = (button.textContent || "").replace(/\\s+/g, " ").trim();
+            return /允许|allow|拒绝|deny/i.test(label + " " + text);
+          });
+          if (decisionButtons.length < 2) continue;
+          const preview = surface.querySelector(
+            '[class~="font-mono"], pre, code',
+          );
+          const copy = (surface.textContent || "").replace(/\\s+/g, " ");
+          const approvalCopy = /终端|terminal|允许.*运行|allow.*run|运行.*命令|run.*command/i.test(copy);
+          const mcpApprovalCopy = /mcp[\\s\\S].*(server|服务器)[\\s\\S].*(tool|工具)/i.test(copy);
+          if ((preview && approvalCopy) || mcpApprovalCopy) {
+            surfaces.set(surface, mcpApprovalCopy);
+            break;
+          }
+        }
+      }
+
+      for (const current of document.querySelectorAll(
+        "[" + APPROVAL_SURFACE_ATTRIBUTE + "],[" + APPROVAL_MCP_ATTRIBUTE + "]",
+      )) {
+        if (!surfaces.has(current)) {
+          current.removeAttribute(APPROVAL_SURFACE_ATTRIBUTE);
+          current.removeAttribute(APPROVAL_MCP_ATTRIBUTE);
+        }
+      }
+      for (const [surface, isMcp] of surfaces) {
+        surface.setAttribute(APPROVAL_SURFACE_ATTRIBUTE, "on");
+        if (isMcp) {
+          surface.setAttribute(APPROVAL_MCP_ATTRIBUTE, "on");
+        } else {
+          surface.removeAttribute(APPROVAL_MCP_ATTRIBUTE);
+        }
+      }
     };
 
     const clearTaskStatusDecorations = () => {
@@ -6353,6 +4543,7 @@ function buildInjectionSource(css) {
       if (!document.documentElement) return;
       const root = document.documentElement;
       markMainContentSurface();
+      markApprovalSurfaces();
       for (const [key, attribute] of Object.entries(FEATURE_ATTRIBUTES)) {
         root.setAttribute(attribute, featureSettings[key] ? "on" : "off");
       }
@@ -6477,6 +4668,7 @@ function buildInjectionSource(css) {
     const refreshDecorations = () => {
       refreshFrame = 0;
       markMainContentSurface();
+      markApprovalSurfaces();
       if (!isAvatarOverlay) {
         decorateSettingsButton();
         if (featureSettings.theme) decorateHome();
@@ -6484,6 +4676,7 @@ function buildInjectionSource(css) {
         const taskRunning = readTaskRunningState();
         decorateTaskStatus(taskRunning);
         if (featureSettings.modelPicker) decorateFlatPicker();
+        else removeFlatPicker();
         publishTaskState(taskRunning);
       }
     };
@@ -6493,9 +4686,11 @@ function buildInjectionSource(css) {
       refreshFrame = window.requestAnimationFrame(refreshDecorations);
     };
 
+    syncNativeDarkThemeClass();
     applyFeatureSettings(featureSettings, { persist: false, broadcast: false, notify: true });
     window.__codexPokedexThemeObserver?.disconnect();
     window.__codexPokedexThemeObserver = new MutationObserver(() => {
+      syncNativeDarkThemeClass();
       if (!document.getElementById(STYLE_ID)) {
         applyFeatureSettings(featureSettings, { persist: false, broadcast: false, notify: false });
       } else {
@@ -6508,12 +4703,14 @@ function buildInjectionSource(css) {
       attributes: true,
       attributeFilter: [
         THEME_ATTRIBUTE,
+        HOST_THEME_ATTRIBUTE,
         OVERLAY_ATTRIBUTE,
         COMPOSER_ATTRIBUTE,
         "class",
         "data-composer-layout",
         "data-composer-radius-variant",
         "data-composer-surface-variant",
+        "role",
         ...Object.values(FEATURE_ATTRIBUTES),
       ],
     });
@@ -6525,13 +4722,24 @@ function buildInjectionSource(css) {
       }
       window.__codexPokedexThemeObserver?.disconnect();
       window.__codexPlusProSettingsUiCleanup?.();
+      if (document.documentElement.getAttribute(DARK_THEME_COMPAT_ATTRIBUTE) === "on") {
+        document.documentElement.classList.remove(DARK_THEME_CLASS);
+        document.documentElement.removeAttribute(DARK_THEME_COMPAT_ATTRIBUTE);
+      }
       try { activityChannel.close(); } catch {}
       try { settingsChannel.close(); } catch {}
       document.querySelector(".codex-plus-pro-settings-button")?.remove();
       document.querySelector(".codex-plus-pro-settings-popover")?.remove();
       document.querySelector(".codex-plus-pro-settings-backdrop")?.remove();
-      for (const element of document.querySelectorAll(".codex-pokedex-flat-picker")) {
-        element.remove();
+      document.documentElement.removeAttribute(FLAT_PICKER_ATTRIBUTE);
+      for (const element of document.querySelectorAll(
+        ".codex-pokedex-flat-picker, [" + FLAT_PICKER_SURFACE_ATTRIBUTE + "], [" + FLAT_PICKER_FAILURE_ATTRIBUTE + "]",
+      )) {
+        if (element.matches(".codex-pokedex-flat-picker")) element.remove();
+        else {
+          element.removeAttribute(FLAT_PICKER_SURFACE_ATTRIBUTE);
+          element.removeAttribute(FLAT_PICKER_FAILURE_ATTRIBUTE);
+        }
       }
       for (const element of document.querySelectorAll("[" + COMPOSER_ATTRIBUTE + "]")) {
         element.removeAttribute(COMPOSER_ATTRIBUTE);
@@ -6540,6 +4748,7 @@ function buildInjectionSource(css) {
         element.style.removeProperty("border-style");
         element.style.removeProperty("border-color");
       }
+      clearApprovalSurfaceMarkers();
       clearTaskStatusDecorations();
       if (window.__codexPokedexActivityChannel === activityChannel) window.__codexPokedexActivityChannel = null;
       if (window.__codexPlusProSettingsChannel === settingsChannel) window.__codexPlusProSettingsChannel = null;
@@ -6601,7 +4810,7 @@ function buildMainControllerSource() {
     const petShowGuards = new Map();
     const controller = {
       active: true,
-      version: "1.8.7",
+      version: "1.8.8",
       petWindowVisibility,
       petHiddenByUs,
       petShowGuards,

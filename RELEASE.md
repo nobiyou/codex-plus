@@ -1,5 +1,23 @@
 # Codex Plus Pro Windows — Release Notes
 
+## 1.8.8 (2026-10-12, service extensions and themed startup)
+
+### Changed
+
+- Removed the embedded Taskboard, its menu/sidebar integration, local server, packaging, and related tests. Existing user data is preserved.
+- Added theme-aware startup wallpaper, logo, and technology animations, with reduced-motion and reduced-transparency support.
+- Prepared the injector before official app activation and kept its cover outside the React root through both HTML and React loading phases. The cover exits when actual workspace, login, or error controls appear.
+- Updated native model picker styling and current Codex shell surfaces, including workspace borders, navigation, composer, diff previews, and approval cards.
+- Added renderer-based official pet visibility control when the main inspector is unavailable.
+- Fixed portable official app startup to use its bundled CLI while preserving an explicit user CLI override.
+
+### Verification
+
+- 68 Node tests passed, including two-phase startup, route exclusions, login/error recovery, and cancellation checks.
+- Both portable-launcher PowerShell tests passed; all 12 PowerShell scripts/modules parsed successfully.
+- Isolated official cold startup covered both native loading phases and exited onto working login controls without exposing the original animation.
+- The signed-in cold-start path has not been rechecked in the active user profile.
+
 ## 1.8.7 (navigation contrast and accent-aware active view)
 
 **Status:** Refines the themed Codex shell after the latest UI update, keeping navigation states readable and tied to the selected accent.

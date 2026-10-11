@@ -5,6 +5,23 @@ import test from "node:test";
 const injectorSourcePath = new URL("../source/injector.mjs", import.meta.url);
 const themeStylesPath = new URL("../source/theme.css", import.meta.url);
 
+test("theme bridge follows the native data-theme dark marker", async () => {
+  const source = await fs.readFile(injectorSourcePath, "utf8");
+
+  assert.match(source, /const HOST_THEME_ATTRIBUTE = "data-theme"/);
+  assert.match(source, /const DARK_THEME_CLASS = "electron-dark"/);
+  assert.match(source, /const DARK_THEME_COMPAT_ATTRIBUTE = "data-codex-plus-dark-theme-compat"/);
+  assert.match(
+    source,
+    /const syncNativeDarkThemeClass = \(\) => \{[\s\S]*?getAttribute\(HOST_THEME_ATTRIBUTE\)[\s\S]*?classList\.add\(DARK_THEME_CLASS\)/,
+  );
+  assert.match(
+    source,
+    /new MutationObserver\(\(\) => \{\s*syncNativeDarkThemeClass\(\);[\s\S]*?HOST_THEME_ATTRIBUTE,/,
+  );
+  assert.match(source, /syncNativeDarkThemeClass\(\);\s*applyFeatureSettings\(featureSettings/);
+});
+
 test("theme marks the current Codex composer with the legacy compatibility class", async () => {
   const source = await fs.readFile(injectorSourcePath, "utf8");
 
@@ -16,6 +33,35 @@ test("theme marks the current Codex composer with the legacy compatibility class
   assert.match(source, /"data-composer-radius-variant"/);
   assert.match(source, /voiceStyle\.backgroundImage !== "none"/);
   assert.match(source, /style\.setProperty\("background-color"/);
+});
+
+test("theme marks native terminal approval surfaces for scoped styling", async () => {
+  const source = await fs.readFile(injectorSourcePath, "utf8");
+
+  assert.match(source, /const APPROVAL_SURFACE_ATTRIBUTE = "data-codex-approval-surface"/);
+  assert.match(source, /const markApprovalSurfaces = \(\) =>/);
+  assert.match(source, /document\.querySelectorAll\('\[role="alert"\]'\)/);
+  assert.match(source, /surface\.setAttribute\(APPROVAL_SURFACE_ATTRIBUTE, "on"\)/);
+  assert.match(source, /current\.removeAttribute\(APPROVAL_SURFACE_ATTRIBUTE\)/);
+  assert.match(source, /markApprovalSurfaces\(\)/);
+});
+
+test("theme marks MCP approval surfaces without requiring a command preview", async () => {
+  const source = await fs.readFile(injectorSourcePath, "utf8");
+
+  assert.match(source, /const APPROVAL_MCP_ATTRIBUTE = "data-codex-approval-mcp"/);
+  assert.ok(
+    source.includes(
+      "const mcpApprovalCopy = /mcp[\\\\s\\\\S].*(server|服务器)[\\\\s\\\\S].*(tool|工具)/i.test(copy);",
+    ),
+  );
+  assert.match(source, /const buttons = Array\.from\(surface\.querySelectorAll\("button"\)\)/);
+  assert.match(source, /preview && approvalCopy\) \|\| mcpApprovalCopy/);
+  assert.match(source, /surface\.setAttribute\(APPROVAL_MCP_ATTRIBUTE, "on"\)/);
+  assert.match(source, /current\.removeAttribute\(APPROVAL_MCP_ATTRIBUTE\)/);
+  assert.match(source, /surface === document\.body \|\| surface === document\.documentElement/);
+  assert.match(source, /formCount !== 1/);
+  assert.match(source, /buttons\.length > 6/);
 });
 
 test("theme maps native semantic tokens onto the existing themed palette", async () => {
@@ -50,16 +96,33 @@ test("composer utility bar follows themed surface tokens in light and dark modes
   assert.doesNotMatch(darkUtilityBlock, /rgb\(28 26 32 \/ 0\.94\)/);
 });
 
-test("model picker base surfaces reuse the active theme palette", async () => {
-  const styles = await fs.readFile(themeStylesPath, "utf8");
-  const segmentBlock = styles.slice(
-    styles.indexOf(":root[data-codex-plus-model-picker=\"on\"] .codex-pokedex-flat-picker-segments"),
-    styles.indexOf(":root[data-codex-plus-model-picker=\"on\"] .codex-pokedex-flat-picker-option"),
-  );
+test("themed model bar keeps Codex as the state owner", async () => {
+  const [source, styles] = await Promise.all([
+    fs.readFile(injectorSourcePath, "utf8"),
+    fs.readFile(themeStylesPath, "utf8"),
+  ]);
 
-  assert.match(segmentBlock, /var\(--codex-plus-accent/);
-  assert.match(segmentBlock, /var\(--color-token-main-surface-primary/);
-  assert.doesNotMatch(segmentBlock, /rgb\(96 62 49 \/ 0\.055\)/);
+  assert.match(source, /id: "conversation\.model-picker"/);
+  assert.match(source, /selector: 'button\[data-codex-intelligence-trigger="true"\]'/);
+  assert.match(source, /styleProbe: "native-model-picker"/);
+  assert.match(source, /const trigger = document\.querySelector\('button\[data-codex-intelligence-trigger="true"\]'\)/);
+  assert.match(source, /trigger\.getAttribute\("aria-haspopup"\) === "menu"/);
+  assert.match(source, /nativeRect\.width >= 40/);
+  assert.match(source, /nativeRect\.height >= 20/);
+  assert.match(source, /const decorateFlatPicker/);
+  assert.match(source, /onSelectModel/);
+  assert.match(source, /powerSelections/);
+  assert.match(source, /onSelectPower/);
+  assert.match(source, /onSelectReasoningEffort/);
+  assert.match(styles, /codex-pokedex-flat-picker/);
+  assert.match(styles, /data-codex-plus-model-picker/);
+});
+
+test("legacy wide-sidebar watermark decorations stay retired", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+
+  assert.doesNotMatch(styles, /\.app-shell-left-panel::before/);
+  assert.doesNotMatch(styles, /\.app-shell-left-panel::after/);
 });
 
 test("theme gives native tooltip variants an accent-aware surface", async () => {
@@ -397,10 +460,6 @@ test("theme gives filled buttons readable foregrounds and quiet disabled states"
   assert.match(buttonBlock, /aside:has\(img\[src\*="bidi-homepage-banner-orb"\]\) button:not\(:has\(svg\)\)/);
   assert.match(buttonBlock, /\[aria-label="开始新的语音聊天"\]/);
   assert.match(buttonBlock, /\[aria-label="听写"\]/);
-  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*color: var\(--codex-plus-action-fg\)/);
-  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*-webkit-text-fill-color: var\(--codex-plus-action-fg\)/);
-  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-option\[data-selected="true"\][\s\S]*background-image: linear-gradient/);
-  assert.match(buttonBlock, /\.codex-pokedex-flat-picker-switch-thumb[\s\S]*background: #ffffff !important/);
 });
 
 test("light blue actions separate label and icon contrast", async () => {
@@ -459,7 +518,12 @@ test("settings surface preserves the original styling while the theme is enabled
 
 test("settings background follows the active theme without changing native control geometry", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
-  const backgroundBlock = styles.slice(styles.lastIndexOf("/* Settings themed background:"));
+  const backgroundStart = styles.lastIndexOf("/* Settings themed background:");
+  const backgroundEnd = styles.indexOf("/* Settings navigation hover:", backgroundStart);
+  const backgroundBlock = styles.slice(
+    backgroundStart,
+    backgroundEnd === -1 ? styles.length : backgroundEnd,
+  );
 
   assert.match(
     backgroundBlock,
@@ -478,7 +542,12 @@ test("settings background follows the active theme without changing native contr
 
 test("settings navigation hover leaves the selected tab unchanged", async () => {
   const styles = await fs.readFile(themeStylesPath, "utf8");
-  const hoverBlock = styles.slice(styles.lastIndexOf("/* Settings navigation hover:"));
+  const hoverStart = styles.lastIndexOf("/* Settings navigation hover:");
+  const hoverEnd = styles.indexOf("/* Sidebar navigation text parity:", hoverStart);
+  const hoverBlock = styles.slice(
+    hoverStart,
+    hoverEnd === -1 ? styles.length : hoverEnd,
+  );
 
   assert.match(
     hoverBlock,
@@ -508,16 +577,68 @@ test("sidebar navigation text matches settings navigation contrast without stren
   assert.match(parityBlock, /\.app-shell-left-panel nav \[data-thread-title="true"\]/);
   assert.match(
     parityBlock,
-    /color:\s*var\(--token-text-secondary, rgb\(48 35 30 \/ 0\.66\)\) !important/,
+    /color:\s*var\(--color-token-text-secondary, var\(--token-text-secondary, rgb\(48 35 30 \/ 0\.66\)\)\) !important/,
   );
   assert.match(parityBlock, /data-thread-secondary-title="true"/);
   assert.match(
     parityBlock,
-    /data-app-action-sidebar-thread-selected="true"[\s\S]*color:\s*var\(--token-text-primary, #30231e\) !important/,
+    /data-app-action-sidebar-thread-selected="true"[\s\S]*color:\s*var\(--color-token-text-primary, var\(--token-text-primary, #30231e\)\) !important/,
   );
   assert.match(parityBlock, /:not\(\[data-thread-secondary-title="true"\]\)/);
   assert.match(
     parityBlock,
     /\[data-thread-secondary-title="true"\][^{]*\{[\s\S]*color:\s*var\(--color-token-text-tertiary, rgba\(42 45 49 \/ 0\.54\)\) !important/,
   );
+});
+
+test("sidebar project labels and icons use settings navigation contrast", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const projectBlock = styles.slice(styles.lastIndexOf("/* Sidebar project rows:"));
+
+  assert.match(projectBlock, /\[data-app-action-sidebar-project-row\]/);
+  assert.match(projectBlock, /\[data-app-action-sidebar-select-project\]/);
+  assert.match(
+    projectBlock,
+    /color:\s*var\(--token-text-secondary, rgb\(48 35 30 \/ 0\.66\)\) !important/,
+  );
+  assert.match(
+    projectBlock,
+    /\[data-app-action-sidebar-select-project\][\s\S]*svg[\s\S]*color:\s*color-mix\([\s\S]*--codex-plus-accent,/,
+  );
+  assert.match(projectBlock, /aria-current="page"/);
+  assert.match(projectBlock, /data-app-action-sidebar-project-active="true"/);
+  assert.match(
+    projectBlock,
+    /color:\s*var\(--token-text-primary, #30231e\) !important/,
+  );
+});
+
+test("native terminal approval cards keep alert content from becoming a nested card", async () => {
+  const styles = await fs.readFile(themeStylesPath, "utf8");
+  const approvalBlock = styles.slice(styles.lastIndexOf("/* Native approval cards:"));
+
+  assert.match(approvalBlock, /\[data-codex-approval-surface\]/);
+  assert.match(approvalBlock, /--codex-plus-approval-surface/);
+  assert.match(approvalBlock, /\[data-codex-approval-surface\]\s*\[role="alert"\][\s\S]*border:\s*0 !important/);
+  assert.match(approvalBlock, /\[data-codex-approval-surface\] > div:first-child[\s\S]*--codex-plus-approval-header-surface/);
+  assert.match(approvalBlock, /\[class~="font-mono"\]\[class\*="bg-surface-tertiary"\]/);
+  assert.match(approvalBlock, /--codex-plus-approval-code-surface/);
+  assert.match(approvalBlock, /\[data-codex-approval-surface\] > form[\s\S]*border-top:/);
+  assert.match(approvalBlock, /button:last-child[\s\S]*--codex-plus-action-bg/);
+  assert.match(approvalBlock, /\.electron-dark[\s\S]*data-codex-approval-surface/);
+});
+
+test("MCP approval cards style parameter rows without changing decision semantics", async () => {
+  const [injector, styles] = await Promise.all([
+    fs.readFile(injectorSourcePath, "utf8"),
+    fs.readFile(themeStylesPath, "utf8"),
+  ]);
+  const approvalBlock = styles.slice(styles.lastIndexOf("/* Native approval cards:"));
+
+  assert.match(injector, /data-codex-approval-mcp/);
+  assert.match(approvalBlock, /\[data-codex-approval-mcp="on"\]/);
+  assert.match(approvalBlock, /:has\(> div > :first-child \+ :last-child\)/);
+  assert.match(approvalBlock, /grid-template-columns:\s*minmax\(72px, 96px\)/);
+  assert.match(approvalBlock, /border-bottom:\s*1px solid/);
+  assert.match(approvalBlock, /data-codex-approval-mcp="on"[\s\S]*--codex-plus-action-bg/);
 });

@@ -1,15 +1,15 @@
-# Codex Plus Pro for Windows (Scope B2) 1.8.7
+# Codex Plus Pro for Windows (Scope B2) 1.8.8
 
 Theme-oriented Windows launcher for official Microsoft Store ChatGPT / Codex (`OpenAI.Codex`) with Codex Plus Pro UI enhancements and local official MSIX version management.
 
-**Status: Scope B2 1.8.7** — theme + accent + wallpaper/logo + light/dark + flat model picker + official pet show/hide control + compatibility checklist + navigation contrast polish + accent-aware active-view controls + official MSIX local-version upgrade.
+**Status: Scope B2 1.8.8** — theme + accent + wallpaper/logo + light/dark + themed startup animation + native model picker styling + official pet show/hide control + compatibility checklist + official MSIX local-version upgrade.
 Picture-in-picture has been removed.
 
 ## Requirements
 
 - Windows 10/11
 - Microsoft Store ChatGPT / Codex (`OpenAI.Codex`)
-- Node.js 22.5+ on PATH (required by the embedded Taskboard server)
+- Node.js 22.5+ on PATH
 
 ## Quick start
 
@@ -47,8 +47,9 @@ powershell -ExecutionPolicy Bypass -File .\uninstall-shortcuts.ps1
 - Accent-linked default wallpaper/logo packs via `theme-packs.json`
 - Light mode + dark mode (`electron-dark`) glass skins for shell, sidebar, composer, banners, chat bubbles
 - Theme CSS injection over CDP
+- Startup animation follows saved theme assets and covers both HTML and React initialization until the workspace, login, or error controls appear
 - "恢复默认" resets theme + accent + wallpaper + logo to Scope A defaults
-- **Flat model picker** on the composer (model / effort / Fast), toggle + density in settings
+- **Themed native model picker** on the composer, with Codex retaining model and effort state
 - **Desktop pet**: avatar-overlay visibility control + dismiss persistence (`pet-notifications.js`)
 - **Official MSIX upgrade path**: FE3 Direct resolves the official Microsoft CDN package, imports it as a local managed version, and keeps only the newest managed version by default
 
@@ -94,7 +95,7 @@ cd windows
 powershell -ExecutionPolicy Bypass -File .\package.ps1
 ```
 
-Creates `dist\Codex-Plus-Pro-Windows-<version>.zip` with launchers, source, assets, docs, and the embedded Taskboard runtime.
+Creates `dist\Codex-Plus-Pro-Windows-<version>.zip` with launchers, source, assets, and docs.
 Recipients still need Node.js 22.5+ and Microsoft Store Codex installed.
 
 ## Launch recipe

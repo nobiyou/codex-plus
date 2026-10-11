@@ -7,7 +7,7 @@ const injectorSourcePath = new URL("../source/injector.mjs", import.meta.url);
 test("compatibility checklist declares the four UI categories and stable item ids", async () => {
   const source = await fs.readFile(injectorSourcePath, "utf8");
 
-  assert.match(source, /const COMPATIBILITY_CHECKLIST_VERSION = "ui-compatibility-v1"/);
+  assert.match(source, /const COMPATIBILITY_CHECKLIST_VERSION = "ui-compatibility-v2"/);
   for (const category of ["global", "conversation", "programming", "settings"]) {
     assert.match(source, new RegExp('key: "' + category + '"'));
   }
@@ -19,6 +19,7 @@ test("compatibility checklist declares the four UI categories and stable item id
     "global.scrollbars",
     "conversation.home-suggestions",
     "conversation.composer",
+    "conversation.model-picker",
     "conversation.utility-bar",
     "conversation.thread-actions",
     "programming.editor",
@@ -28,7 +29,6 @@ test("compatibility checklist declares the four UI categories and stable item id
     "settings.entry",
     "settings.navigation",
     "settings.content",
-    "settings.taskboard-service",
     "settings.version",
   ]) {
     assert.match(source, new RegExp('id: "' + id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + '"'));
@@ -75,12 +75,13 @@ test("compatibility repairs use declared scoped fallback attributes", async () =
 });
 
 test("compatibility settings UI exposes categorized detection and repair controls", async () => {
-  const [source, styles] = await Promise.all([
+  const [source, styles, version] = await Promise.all([
     fs.readFile(injectorSourcePath, "utf8"),
     fs.readFile(new URL("../source/theme.css", import.meta.url), "utf8"),
+    fs.readFile(new URL("../source/VERSION", import.meta.url), "utf8"),
   ]);
 
-  assert.match(source, /const SETTINGS_UI_VERSION = "win-settings-scope-b2-1\.8\.7-taskboard-service-compatibility-v2"/);
+  assert.ok(source.includes(`const SETTINGS_UI_VERSION = "win-settings-scope-b2-${version.trim()}-service-extensions-v3";`), "settings UI must use the published release version");
   assert.match(source, /key: "compatibility", label: "界面兼容性", feature: "compatibility"/);
   for (const label of ["全部", "全局", "对话界面", "编程界面", "设置界面"]) {
     assert.match(source, new RegExp(label));

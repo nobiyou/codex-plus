@@ -10,8 +10,6 @@ $LogFile = Join-Path $LogDir "Codex-Plus-Pro.log"
 $PidFile = Join-Path $StateRoot "injector.pid"
 $PortFile = Join-Path $StateRoot "renderer-port.txt"
 $ResolverPath = Join-Path $PSScriptRoot "official-codex.psm1"
-$TaskboardRuntimePath = Join-Path $PSScriptRoot "taskboard-runtime.psm1"
-$TaskboardStateRoot = Join-Path $StateRoot "taskboard"
 
 function Section($title) {
   Write-Host ""
@@ -124,23 +122,6 @@ if (Test-Path $PortFile) {
   Write-Host "No renderer-port.txt file."
 }
 
-Section "Taskboard Sidebar Integration"
-if (Test-Path -LiteralPath $TaskboardRuntimePath) {
-  try {
-    Import-Module $TaskboardRuntimePath -Force
-    $taskboard = Get-CodexPlusTaskboardStatus -StateRoot $TaskboardStateRoot
-    Write-Host ("Root: " + $taskboard.Root)
-    Write-Host ("Port: " + $taskboard.Port)
-    Write-Host ("Healthy: " + $taskboard.Healthy)
-    Write-Host ("Embed URL: " + $taskboard.EmbedUrl)
-    Write-Host ("Process ID: " + $taskboard.ProcessId)
-    Write-Host ("Reason: " + $taskboard.Reason)
-  } catch {
-    Write-Host ("Taskboard status failed: " + $_.Exception.Message)
-  }
-} else {
-  Write-Host "taskboard-runtime.psm1 is missing."
-}
 
 Section "Port Availability (near 9229)"
 function Test-PortFree([int]$port) {
