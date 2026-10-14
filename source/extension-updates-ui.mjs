@@ -1,11 +1,13 @@
 // Serialized into the renderer by injector.mjs. Keep this function self-contained.
 export function createExtensionUpdatesUI(window, document) {
-  if (window.__codexPlusProExtensionsUI?.version === 3) return window.__codexPlusProExtensionsUI;
+  if (window.__codexPlusProExtensionsUI?.version === 4) return window.__codexPlusProExtensionsUI;
   const binding = "__codexPlusProExtensionUpdates";
   const labels = { available: "有更新", current: "已是最新", ahead: "本地版本较新", "unknown-version": "本地版本未知", different: "内容不同", managed: "远程服务", "no-source": "未配置来源", unchecked: "未检查", checking: "检查中", failed: "检查失败" };
+  const updateLabels = { prepared: "更新中断，待恢复", updating: "正在更新", updated: "已更新", "pending-restart": "已准备新版，重启 MCP 后生效", "rolling-back": "正在回退", "rolled-back": "已回退", skipped: "已跳过", failed: "更新失败" };
+  const evidenceLabels = { git: "Git 仓库", "install-record": "安装记录", "package-manifest": "已安装包信息", launcher: "启动参数", manual: "手动关联", unknown: "原始来源待确认" };
   const categories = { mcp: "MCP", skill: "Skills", missing: "需补充" };
   const matchesCategory = (item, key) => key === "missing" ? item.status === "no-source" : item.kind === key;
-  let state = { items: [], warnings: [], autoCheck: false, state: "idle", updateCount: 0 };
+  let state = { items: [], warnings: [], history: [], autoCheck: false, autoUpdate: false, state: "idle", updateCount: 0 };
   let panel = null, category = "mcp", pending = false, watchdog = null;
   const drafts = new Map();
   const element = (tag, text, className) => {
@@ -31,23 +33,26 @@ export function createExtensionUpdatesUI(window, document) {
     } catch { return null; }
   };
   const sourceLabel = source => !source ? "尚未关联可检查的来源" : source.type === "github" ? "GitHub · " + source.repository + (source.path ? "/" + source.path : "") + " · " + source.ref : source.type + " · " + source.package;
-  const busy = () => pending || state.state === "checking";
+  const running = value => ["checking", "updating", "rolling-back"].includes(value);
+  const busy = () => pending || running(state.state);
   const armWatchdog = () => {
     window.clearTimeout(watchdog);
     watchdog = window.setTimeout(() => {
-      pending = false; state.state = "failed"; state.error = "扩展检查暂未返回结果，可重新扫描或稍后重试。"; render();
-    }, 60000);
+      pending = false; state.state = "failed"; state.error = "扩展操作暂未返回结果，请重新扫描确认状态后再重试。"; render();
+    }, 240000);
   };
   function request(payload) {
-    if (pending && payload.action !== "list") return;
+    if (busy() && payload.action !== "list") return;
     if (typeof window[binding] !== "function") {
       state.error = "扩展检查入口未连接，请从 Plus 启动器重新启动后重试。"; pending = false; render(); return;
     }
-    const previousAutoCheck = state.autoCheck;
-    if (payload.action === "preferences") state.autoCheck = payload.autoCheck;
+    const previousPreferences = { autoCheck: state.autoCheck, autoUpdate: state.autoUpdate };
+    if (payload.action === "preferences") for (const key of ["autoCheck", "autoUpdate"]) if (key in payload) state[key] = payload[key];
+    if (payload.action === "update") state.state = "updating";
+    if (payload.action === "rollback") state.state = "rolling-back";
     pending = true; state.error = ""; render(); armWatchdog();
     try { window[binding](JSON.stringify(payload)); }
-    catch { window.clearTimeout(watchdog); pending = false; state.autoCheck = previousAutoCheck; state.error = "无法连接扩展检查入口，请重试。"; render(); }
+    catch { window.clearTimeout(watchdog); pending = false; state.state = "failed"; Object.assign(state, previousPreferences); state.error = "无法连接扩展检查入口，请重试。"; render(); }
   }
   function indicators() {
     const count = state.updateCount || 0;
@@ -105,7 +110,7 @@ export function createExtensionUpdatesUI(window, document) {
       const source = type === "github" ? { type, repository: fields.repository.value, path: fields.path.value, ref: fields.ref.value } : { type, package: fields.package.value };
       request({ action: "source", itemId: item.id, source, currentVersion: fields.currentVersion.value });
     });
-    form.appendChild(element("p", "来源仅用于检查，保存后可点击“检查”获取最新内容。", "codex-plus-extension-muted"));
+    form.appendChild(element("p", "保存来源后先检查更新；核实原版本和安装方式后才能自动更新。", "codex-plus-extension-muted"));
     details.appendChild(form); return details;
   }
   function row(item) {
@@ -115,6 +120,7 @@ export function createExtensionUpdatesUI(window, document) {
     const status = (category === "missing" ? (item.kind === "mcp" ? "MCP" : "Skill") + " · " : "") + (labels[item.status] || "状态未知");
     heading.append(element("strong", item.name), element("span", status, "codex-plus-extension-state"));
     card.appendChild(heading);
+    card.appendChild(element("p", (item.managed ? "安装归属：远程服务" : "安装归属：独立安装") + " · 来源依据：" + (evidenceLabels[item.sourceEvidence] || "由提供方管理"), "codex-plus-extension-muted"));
     const currentLabel = { configured: "固定配置", "install-record": "安装记录", commit: "本地提交", content: "本地目录", provided: "已填写版本" }[item.currentKind] || "当前版本";
     card.appendChild(element("p", currentLabel + "：" + (item.currentVersion || "未知") + (item.latestVersion ? "  →  最新：" + item.latestVersion : ""), "codex-plus-extension-version"));
     if (item.managed) {
@@ -126,10 +132,18 @@ export function createExtensionUpdatesUI(window, document) {
     }
     if (item.enabled === false) card.appendChild(element("p", "此 MCP 当前已禁用。", "codex-plus-extension-muted"));
     if (item.detail) card.appendChild(element("p", item.detail, "codex-plus-extension-muted"));
+    if (item.updateState) {
+      const label = item.kind === "mcp" && item.updateState === "rolled-back" ? "已回退，重启 MCP 后生效" : updateLabels[item.updateState] || item.updateState;
+      const result = element("p", "更新结果：" + label + (item.updateError ? " · " + item.updateError : ""), "codex-plus-extension-update-result");
+      result.setAttribute("data-extension-update-state", item.updateState); card.appendChild(result);
+    }
+    if (!item.managed && item.status === "available" && !item.updateSupported) card.appendChild(element("p", "自动更新不可用：" + item.updateDisabledReason, "codex-plus-extension-muted"));
     if (item.error) { const error = element("p", item.error, "codex-plus-extension-error"); error.setAttribute("role", "alert"); card.appendChild(error); }
     if (item.checkedAt) card.appendChild(element("p", (item.status === "failed" ? "上次成功检查：" : "检查时间：") + time(item.checkedAt), "codex-plus-extension-muted"));
     const actions = element("div", undefined, "codex-plus-extension-actions");
     if (!item.managed) { const check = button("检查", () => request({ action: "check", itemId: item.id })); check.disabled = busy() || !item.source; actions.appendChild(check); }
+    if (item.status === "available" && item.updateSupported) { const update = button("更新", () => request({ action: "update", itemId: item.id })); update.disabled = busy(); update.setAttribute("data-extension-operation", "update"); actions.appendChild(update); }
+    if (item.canRollback) { const rollback = button("回退上次更新", () => request({ action: "rollback", itemId: item.id })); rollback.disabled = busy(); rollback.setAttribute("data-extension-operation", "rollback"); actions.appendChild(rollback); }
     const repository = item.source?.type === "github" ? item.source.repository : item.upstreamRepository;
     if (repository) {
       if (item.source?.type !== "github") card.appendChild(element("p", "GitHub · " + repository, "codex-plus-extension-muted"));
@@ -151,16 +165,19 @@ export function createExtensionUpdatesUI(window, document) {
     indicators(); if (!panel) return;
     const active = document.activeElement;
     const focusedField = active?.getAttribute?.("data-extension-field"), selection = active?.selectionStart;
+    const focusedItem = active?.closest?.("[data-extension-item]")?.getAttribute("data-extension-item"), focusedAction = active?.getAttribute?.("data-extension-operation");
     panel.setAttribute("aria-busy", busy() ? "true" : "false");
     const summary = panel.querySelector("[data-extension-summary]");
     const missing = state.items.filter(item => matchesCategory(item, "missing")).length;
     const failed = state.items.filter(item => item.status === "failed").length;
-    summary.textContent = busy() ? "正在检查扩展，请稍候…" : state.items.length + " 项扩展 · " + state.updateCount + " 项有更新" + (missing ? " · " + missing + " 项需补充来源" : "") + (failed ? " · " + failed + " 项检查失败" : "");
+    const progress = state.state === "updating" ? "正在备份并更新扩展，请稍候…" : state.state === "rolling-back" ? "正在回退扩展，请稍候…" : "正在检查扩展，请稍候…";
+    summary.textContent = busy() ? progress : state.items.length + " 项扩展 · " + state.updateCount + " 项有更新" + (missing ? " · " + missing + " 项需补充来源" : "") + (failed ? " · " + failed + " 项检查失败" : "");
     panel.querySelector("[data-extension-time]").textContent = "最近检查：" + time(state.lastCheckedAt);
     const message = panel.querySelector("[data-extension-message]");
     message.textContent = [state.error, ...(state.warnings || [])].filter(Boolean).join("\n"); message.hidden = !message.textContent;
     for (const control of panel.querySelectorAll("[data-extension-operation]")) control.disabled = busy();
     panel.querySelector("[data-extension-auto]").checked = state.autoCheck === true;
+    panel.querySelector("[data-extension-auto-update]").checked = state.autoUpdate === true;
     const list = panel.querySelector("[data-extension-list]"); list.replaceChildren();
     const items = state.items.filter(item => matchesCategory(item, category));
     for (const item of items) list.appendChild(row(item));
@@ -170,21 +187,27 @@ export function createExtensionUpdatesUI(window, document) {
       const kind = tab.getAttribute("data-extension-category");
       tab.setAttribute("aria-pressed", kind === category ? "true" : "false"); tab.textContent = categories[kind] + " · " + state.items.filter(item => matchesCategory(item, kind)).length;
     }
+    const history = panel.querySelector("[data-extension-history-list]"); history.replaceChildren();
+    for (const entry of state.history || []) history.appendChild(element("p", entry.name + " · " + (updateLabels[entry.state] || entry.state) + " · " + time(entry.finishedAt || entry.startedAt) + (entry.error ? " · " + entry.error : ""), "codex-plus-extension-muted"));
+    panel.querySelector("[data-extension-history]").hidden = !state.history?.length;
     if (focusedField) {
       const input = [...panel.querySelectorAll("[data-extension-field]")].find(node => node.getAttribute("data-extension-field") === focusedField);
       input?.focus({ preventScroll: true });
       if (typeof selection === "number" && input?.type === "text") input.setSelectionRange(selection, selection);
+    } else if (focusedItem && focusedAction && !busy()) {
+      const card = [...list.children].find(node => node.getAttribute("data-extension-item") === focusedItem);
+      (card?.querySelector('[data-extension-operation="' + focusedAction + '"]') || card?.querySelector('[data-extension-operation]'))?.focus({ preventScroll: true });
     }
   }
   window.__codexPlusProExtensionUpdateResult = payload => {
     state = { ...state, ...payload, error: payload.error || "" };
-    pending = payload.state === "checking";
+    pending = running(payload.state);
     if (pending) armWatchdog(); else window.clearTimeout(watchdog);
     render();
   };
   window.addEventListener("pagehide", () => window.clearTimeout(watchdog), { once: true });
   const api = {
-    version: 3,
+    version: 4,
     refresh: () => request({ action: "list" }),
     indicators,
     createPanel() {
@@ -198,12 +221,18 @@ export function createExtensionUpdatesUI(window, document) {
       const auto = element("label", undefined, "codex-plus-extension-auto");
       const input = element("input"); input.type = "checkbox"; input.setAttribute("data-extension-auto", "true"); input.setAttribute("data-extension-operation", "preferences");
       input.addEventListener("change", () => request({ action: "preferences", autoCheck: input.checked })); auto.append(input, element("span", "每日后台检查并提醒（Plus 运行期间）"));
+      const autoUpdate = element("label", undefined, "codex-plus-extension-auto");
+      const updateInput = element("input"); updateInput.type = "checkbox"; updateInput.setAttribute("data-extension-auto-update", "true"); updateInput.setAttribute("data-extension-operation", "preferences");
+      updateInput.addEventListener("change", () => request({ action: "preferences", autoUpdate: updateInput.checked })); autoUpdate.append(updateInput, element("span", "检查后自动更新（默认关闭）"));
+      const policy = element("p", "只更新来源与安装方式已核实的 GitHub 扩展。更新前备份，跳过本地修改和来源不明的项目；MCP 重启后生效。Codex 自带组件由客户端管理。", "codex-plus-extension-muted");
       const filters = element("div", undefined, "codex-plus-extension-categories"); filters.setAttribute("role", "group"); filters.setAttribute("aria-label", "扩展筛选");
       for (const [kind, title] of Object.entries(categories)) { const tab = button(title, () => { category = kind; render(); }); tab.setAttribute("data-extension-category", kind); filters.appendChild(tab); }
       const message = element("p", "", "codex-plus-extension-error"); message.setAttribute("data-extension-message", "true"); message.setAttribute("role", "alert"); message.hidden = true;
       const list = element("div", undefined, "codex-plus-extension-list"); list.setAttribute("data-extension-list", "true");
+      const history = element("details", undefined, "codex-plus-extension-history"); history.setAttribute("data-extension-history", "true");
+      const historyList = element("div"); historyList.setAttribute("data-extension-history-list", "true"); history.append(element("summary", "更新记录"), historyList);
       const scope = element("p", "查看第三方 MCP 与 Skills 的上游版本和更新内容，优先关联 GitHub 项目。", "codex-plus-extension-muted");
-      panel.append(scope, summary, timestamp, actions, auto, filters, message, list); render(); return panel;
+      panel.append(scope, summary, timestamp, actions, auto, autoUpdate, policy, filters, message, list, history); render(); return panel;
     },
   };
   window.__codexPlusProExtensionsUI = api;

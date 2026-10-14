@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { ExtensionUpdater, UpdateSkipped, folderBlobs, updateSupport } from "./extension-update-install.mjs";
 
 const execFileAsync = promisify(execFile);
 const DAY = 86400000;
-const CHECK_RESULT_VERSION = 2;
+const CHECK_RESULT_VERSION = 3;
 const hash = value => createHash("sha256").update(value).digest("hex");
 const isSha = value => /^[a-f0-9]{40}$/i.test(value || "");
 const short = value => String(value || "").slice(0, 10);
@@ -24,9 +25,9 @@ async function optionalJson(file) {
 
 // Only the public launcher fields are retained; env, headers and remote URLs
 // never leave this reader. No MCP command or extension code is executed.
-function tomlStatements(text) {
+function tomlStatements(text, positions = false) {
   const statements = [];
-  let current = "", quote = "", depth = 0, escape = false, comment = false;
+  let current = "", quote = "", depth = 0, escape = false, comment = false, start = 0;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (comment && c !== "\n") continue;
@@ -47,11 +48,11 @@ function tomlStatements(text) {
     if (c === "[") depth++;
     if (c === "]") depth--;
     if (depth < 0) throw new Error("MCP TOML 配置的括号不匹配");
-    if (c === "\n" && depth === 0) { if (current.trim()) statements.push(current.trim()); current = ""; }
+    if (c === "\n" && depth === 0) { if (current.trim()) statements.push(positions ? { text: current.trim(), start, end: i } : current.trim()); current = ""; start = i + 1; }
     else current += c;
   }
   if (quote || depth) throw new Error("MCP TOML 配置存在未结束的字符串或数组");
-  if (current.trim()) statements.push(current.trim());
+  if (current.trim()) statements.push(positions ? { text: current.trim(), start, end: text.length } : current.trim());
   return statements;
 }
 function tomlValue(raw) {
@@ -152,9 +153,28 @@ export function readMcpConfig(text) {
     else Object.assign(entry, launcherPackage(raw.command || "", args));
     const files = [raw.command, ...args].filter(value => typeof value === "string" && (path.isAbsolute(value) || path.win32.isAbsolute(value)) && /\.(mjs|cjs|js|exe)$/i.test(value));
     Object.defineProperty(entry, "localFiles", { value: files });
+    Object.defineProperty(entry, "launch", { value: { command: raw.command || "", args } });
     servers.push(entry);
   }
   return { servers };
+}
+
+function rewriteMcpArgs(text, name, expected, args) {
+  const server = readMcpConfig(text).servers.find(entry => entry.name === name);
+  if (!server || JSON.stringify(server.launch) !== JSON.stringify(expected)) throw new UpdateSkipped("MCP 启动配置已变化");
+  let selected = false;
+  for (const statement of tomlStatements(text, true)) {
+    if (statement.text.startsWith("[")) {
+      const keys = statement.text.startsWith("[[") ? [] : tableKeys(statement.text.slice(1, -1));
+      selected = keys.length === 2 && keys[0] === "mcp_servers" && keys[1] === name;
+    } else if (selected && /^args\s*=/.test(statement.text)) {
+      const raw = text.slice(statement.start, statement.end);
+      const leading = raw.match(/^[ \t]*/)[0];
+      const replacement = leading + "args = " + JSON.stringify(args) + (raw.endsWith("\r") ? "\r" : "");
+      return text.slice(0, statement.start) + replacement + text.slice(statement.end);
+    }
+  }
+  throw new Error("MCP 参数字段无法定位，已保留原配置");
 }
 
 export function normalizeSource(input) {
@@ -220,7 +240,7 @@ export function compareVersions(a, b) {
 
 async function runGit(directory, args) {
   try {
-    const result = await execFileAsync("git", ["-C", directory, ...args], { windowsHide: true, timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } });
+    const result = await execFileAsync("git", ["-c", "core.fsmonitor=false", "-C", directory, ...args], { windowsHide: true, timeout: 5000, maxBuffer: 256 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } });
     return result.stdout.trim();
   } catch { return ""; } // Missing Git/untrusted checkout remains an unknown source.
 }
@@ -233,13 +253,16 @@ async function gitProvenance(directory, cache, wholeRepository = false) {
     if (parent === root) return null;
     root = parent;
   }
-  if (!cache.has(root)) cache.set(root, (async () => ({ repository: githubRepository(await runGit(root, ["config", "--get", "remote.origin.url"])), commit: await runGit(root, ["rev-parse", "HEAD"]) }))());
+  if (!cache.has(root)) cache.set(root, (async () => {
+    const remote = await runGit(root, ["config", "--get", "remote.origin.url"]);
+    return { repository: githubRepository(remote), remote, commit: await runGit(root, ["rev-parse", "HEAD"]) };
+  })());
   const info = await cache.get(root);
   if (!info.repository || !isSha(info.commit)) return null;
   const subdir = wholeRepository ? "" : path.relative(root, directory).split(path.sep).join("/");
   const tree = await runGit(root, ["rev-parse", subdir ? `HEAD:${subdir}` : "HEAD^{tree}"]);
   const dirty = await runGit(root, ["status", "--porcelain", "--", subdir || "."]);
-  return { source: normalizeSource({ type: "github", repository: info.repository, path: subdir }), baselineTree: isSha(tree) ? tree : "", currentCommit: info.commit, currentVersion: short(info.commit), currentKind: "commit", locallyModified: !!dirty };
+  return { source: normalizeSource({ type: "github", repository: info.repository, path: subdir }), baselineTree: isSha(tree) ? tree : "", currentCommit: info.commit, currentVersion: short(info.commit), currentKind: "commit", locallyModified: !!dirty, installation: { type: "git", root, remote: info.remote }, sourceEvidence: "git" };
 }
 async function packageProvenance(file) {
   if (!(await fs.stat(file)).isFile()) return null;
@@ -249,7 +272,8 @@ async function packageProvenance(file) {
     if (manifest) {
       const spec = packageSpec(manifest.name, "npm");
       if (!spec || typeof manifest.version !== "string") return null;
-      return { ...spec, currentVersion: manifest.version, currentKind: "installed", location: file, upstreamRepository: packageRepository(manifest, "npm") };
+      const cached = /[\\/]_npx[\\/][^\\/]+[\\/]node_modules[\\/]/i.test(directory);
+      return { ...spec, currentVersion: manifest.version, currentKind: "installed", location: file, upstreamRepository: packageRepository(manifest, "npm"), sourceEvidence: "package-manifest", installation: cached ? { type: "npm-cache", root: directory, entry: path.relative(directory, file) } : null };
     }
     const parent = path.dirname(directory);
     if (directory === parent) break;
@@ -258,36 +282,46 @@ async function packageProvenance(file) {
   return null;
 }
 function publicItem(item) {
-  const { fingerprint, baselineTree, currentCommit, localBlobs, confirmedTree, ...result } = item;
+  const { fingerprint, baselineTree, currentCommit, localBlobs, confirmedTree, installation, launch, configPath, ...result } = item;
+  const support = updateSupport(item);
+  return { ...result, updateSupported: support.supported, updateDisabledReason: support.reason || "" };
+}
+const sameSource = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const within = (root, file) => { const relative = path.relative(root, file); return !relative || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep)); };
+const reversible = entry => ["updated", "pending-restart", "rolled-back"].includes(entry.state);
+function cachedResult(value = {}) {
+  // Cached check output must never replace discovered paths, launchers or provenance.
+  const fields = ["status", "checkedAt", "latestVersion", "notes", "notesLabel", "updateUrl", "detail", "error", "previousStatus", "attemptedAt", "confirmedTree", "currentVersion", "currentKind", "upstreamRepository"];
+  const result = Object.fromEntries(fields.filter(key => typeof value[key] === "string").map(key => [key, value[key]]));
+  if (result.confirmedTree && !isSha(result.confirmedTree)) delete result.confirmedTree;
+  if (result.upstreamRepository) result.upstreamRepository = githubRepository(result.upstreamRepository) || "";
   return result;
 }
-
-async function folderBlobs(directory) {
-  const blobs = {};
-  let size = 0, count = 0;
-  const visit = async (root, prefix) => {
-    for (const file of await fs.readdir(root, { withFileTypes: true })) {
-      if ([".git", "node_modules", "__pycache__", ".venv"].includes(file.name)) continue;
-      if (++count > 512 || file.isSymbolicLink()) throw new Error("本地 Skill 目录过大或包含链接，无法比较完整内容");
-      const relative = prefix + file.name;
-      if (file.isDirectory()) await visit(path.join(root, file.name), relative + "/");
-      else if (file.isFile()) {
-        const stat = await fs.stat(path.join(root, file.name));
-        size += stat.size;
-        if (size > 32 * 1024 * 1024) throw new Error("本地 Skill 内容过大，无法完整比较");
-        const content = await fs.readFile(path.join(root, file.name));
-        blobs[relative] = createHash("sha1").update(Buffer.from("blob " + content.length + "\0")).update(content).digest("hex");
-      }
+function validateHistory(entry) {
+  const invalid = () => { throw new Error("扩展更新历史格式无效；已停止写入，请保留状态文件和备份"); };
+  if (!entry || !/^[a-f0-9-]{36}$/.test(entry.id || "") || !Array.isArray(entry.itemIds) || !entry.itemIds.length || !entry.itemIds.every(id => /^(skill|mcp)-[a-f0-9]{24}$/.test(id)) || typeof entry.name !== "string" || !["git", "skill-copy", "npm-cache", "package-argument", "unsupported"].includes(entry.method) || !["prepared", "rolling-back", "updated", "pending-restart", "rolled-back", "skipped", "failed"].includes(entry.state)) invalid();
+  if (!["prepared", "rolling-back", "updated", "pending-restart", "rolled-back"].includes(entry.state)) return;
+  if (!sameSource(entry.source, normalizeSource(entry.source))) invalid();
+  if (entry.method === "git") {
+    if (entry.source.type !== "github" || !path.isAbsolute(entry.root || "") || !isSha(entry.before) || !isSha(entry.after) || typeof entry.branch !== "string" || !entry.branch || entry.branch.startsWith("-")) invalid();
+  } else if (entry.method === "skill-copy") {
+    if (entry.source.type !== "github" || !path.isAbsolute(entry.target || "") || !isSha(entry.beforeTree) || !isSha(entry.afterTree) || !/^[a-f0-9]{64}$/.test(entry.beforeHash || "") || !/^[a-f0-9]{64}$/.test(entry.afterHash || "") || entry.backup !== path.join(path.dirname(entry.target), ".codex-plus-backups", entry.id, "original") || entry.stage !== path.join(path.dirname(entry.target), ".codex-plus-backups", entry.id, "staged")) invalid();
+  } else if (["npm-cache", "package-argument"].includes(entry.method)) {
+    if (!["npm", "pypi"].includes(entry.source.type) || !path.isAbsolute(entry.configPath || "") || !Number.isInteger(entry.index) || entry.index < 0 || entry.index > 1024 || typeof entry.before !== "string" || typeof entry.after !== "string" || !/^[a-f0-9]{64}$/.test(entry.commandHash || "")) invalid();
+    if (entry.method === "package-argument") {
+      const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const spec = new RegExp("^(?:--package=|--from=)?" + escape(entry.source.package) + (entry.source.type === "npm" ? "@" : "==") + "[0-9][0-9A-Za-z.+-]*$");
+      if (!spec.test(entry.before) || !spec.test(entry.after)) invalid();
     }
-  };
-  await visit(directory, "");
-  return Object.fromEntries(Object.entries(blobs).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+  } else invalid();
 }
 
 export class ExtensionUpdateService {
-  constructor({ home = os.homedir(), codexHome = process.env.CODEX_HOME || path.join(home, ".codex"), statePath = path.join(process.env.LOCALAPPDATA || path.join(home, ".local", "share"), "Codex-Plus-Pro", "extension-updates.json"), fetcher = fetch, now = () => Date.now(), onState = () => {} } = {}) {
+  constructor({ home = os.homedir(), codexHome = process.env.CODEX_HOME || path.join(home, ".codex"), statePath = path.join(process.env.LOCALAPPDATA || path.join(home, ".local", "share"), "Codex-Plus-Pro", "extension-updates.json"), fetcher = fetch, now = () => Date.now(), onState = () => {}, updateExecutor, npmCli } = {}) {
     Object.assign(this, { home, codexHome, statePath, fetcher, now, onState });
     this.saved = null; this.items = []; this.warnings = []; this.busy = null; this.lastAttempt = 0;
+    this.activity = "idle";
+    this.updater = new ExtensionUpdater({ requestJson: (url, memo) => this.requestJson(url, memo), parseConfig: readMcpConfig, rewriteArgs: rewriteMcpArgs, executor: updateExecutor, npmCli, dataDirectory: path.dirname(statePath), onProgress: () => this.emit(this.activity) });
   }
   async load() {
     if (!this.loading) this.loading = (async () => {
@@ -297,6 +331,17 @@ export class ExtensionUpdateService {
       if (saved && (saved.schemaVersion !== 1 || typeof saved.sources !== "object" || !saved.sources || typeof saved.cache !== "object" || !saved.cache)) throw new Error("扩展更新状态格式无效");
       this.saved = saved || { schemaVersion: 1, autoCheck: false, sources: {}, cache: {}, lastCheckedAt: "", lastAttemptAt: "" };
       this.saved.autoCheck = this.saved.autoCheck === true;
+      this.saved.autoUpdate = this.saved.autoUpdate === true;
+      if (this.saved.history !== undefined && !Array.isArray(this.saved.history)) throw new Error("扩展更新历史格式无效");
+      this.saved.history ||= [];
+      for (const operation of this.saved.history) validateHistory(operation);
+      await this.discover();
+      for (const operation of this.saved.history.filter(entry => ["prepared", "rolling-back"].includes(entry.state))) {
+        try { await this.validateOperation(operation); operation.state = await this.updater.recover(operation); }
+        catch { operation.state = "failed"; operation.error = "上次更新中断，请检查安装位置和备份"; }
+        if (operation.state === "failed") operation.error ||= "上次更新中断；未继续覆盖，请检查原版本和备份";
+        await this.persist();
+      }
       this.lastAttempt = Date.parse(this.saved.lastAttemptAt || "") || 0;
       for (const entry of Object.values(this.saved.sources)) normalizeSource(entry.source);
     })();
@@ -308,8 +353,8 @@ export class ExtensionUpdateService {
     try { await fs.writeFile(temporary, JSON.stringify(this.saved, null, 2), "utf8"); await fs.rename(temporary, this.statePath); }
     finally { await fs.rm(temporary, { force: true }); }
   }
-  snapshot(state = this.busy ? "checking" : "idle", error = "") {
-    return { state, error, autoCheck: this.saved?.autoCheck === true, lastCheckedAt: this.saved?.lastCheckedAt || "", warnings: this.warnings, items: this.items.map(publicItem), updateCount: this.items.filter(item => item.status === "available").length };
+  snapshot(state = this.busy ? this.activity : "idle", error = "") {
+    return { state, error, autoCheck: this.saved?.autoCheck === true, autoUpdate: this.saved?.autoUpdate === true, lastCheckedAt: this.saved?.lastCheckedAt || "", warnings: this.warnings, items: this.items.map(publicItem), updateCount: this.items.filter(item => item.status === "available").length, history: (this.saved?.history || []).slice(-30).reverse().map(({ id, name, method, state, startedAt, finishedAt, error }) => ({ id, name, method, state, startedAt, finishedAt, error })) };
   }
   emit(state, error) { const result = this.snapshot(state, error); this.onState(result); return result; }
   async discover() {
@@ -332,17 +377,27 @@ export class ExtensionUpdateService {
         item.source = normalizeSource(override.source);
         if (override.currentVersion) { item.currentVersion = override.currentVersion; item.currentKind = "provided"; }
         // A different repository/directory cannot reuse an automatically inferred tree.
-        if (item.originalSource && JSON.stringify(item.source) !== JSON.stringify(item.originalSource)) { item.baselineTree = ""; item.upstreamRepository = ""; }
+        item.sourceEvidence = "manual";
+        if (item.originalSource && JSON.stringify(item.source) !== JSON.stringify(item.originalSource)) { item.baselineTree = ""; item.upstreamRepository = ""; item.installation = null; }
       }
       delete item.originalSource;
       if (item.kind === "skill" && item.source?.type === "github" && !item.managed) {
         try { item.localBlobs = await folderBlobs(item.location); item.contentHash = hash(JSON.stringify(item.localBlobs)); }
         catch { item.localComparisonUnavailable = true; warnings.push("Skill “" + item.name + "” 的本地内容无法完整比较"); }
       }
+      const completed = [...this.saved.history].reverse().find(entry => entry.itemIds.includes(item.id) && reversible(entry));
+      if (completed?.method === "skill-copy" && sameSource(completed.source, item.source)) {
+        item.baselineTree = completed.state === "rolled-back" ? completed.beforeTree : completed.afterTree;
+        item.currentVersion = short(item.baselineTree); item.currentKind = "install-record";
+      }
+      if (item.installation?.type === "package-argument" && override?.currentVersion && item.currentKind === "provided") item.installation = null;
       item.fingerprint = hash(JSON.stringify([CHECK_RESULT_VERSION, item.id, item.currentVersion, item.source, item.baselineTree, item.contentHash, item.locallyModified, item.upstreamRepository]));
       delete item.contentHash;
       const cached = this.saved.cache[item.id];
-      Object.assign(item, cached?.fingerprint === item.fingerprint ? cached.result : { status: item.managed ? "managed" : item.source ? "unchecked" : "no-source", checkedAt: "", latestVersion: "", notes: "" });
+      Object.assign(item, cached?.fingerprint === item.fingerprint ? cachedResult(cached.result) : { status: item.managed ? "managed" : item.source ? "unchecked" : "no-source", checkedAt: "", latestVersion: "", notes: "" });
+      const history = [...this.saved.history].reverse().find(entry => entry.itemIds?.includes(item.id));
+      if (history) { item.updateState = history.method === "git" && history.state === "pending-restart" && item.kind === "skill" ? "updated" : history.state; item.updateError = history.error || ""; }
+      item.canRollback = !!completed && completed.state !== "rolled-back";
       items.push(item);
     };
     const configPath = path.join(this.codexHome, "config.toml");
@@ -350,7 +405,12 @@ export class ExtensionUpdateService {
       const config = readMcpConfig(await readSmall(configPath));
       for (const server of config.servers) {
         if (server.localFiles.some(file => clientOwned(file) || (/node_repl\.exe$/i.test(file) && /[\\/]resources[\\/]/i.test(file)))) continue;
-        const item = { ...server, kind: "mcp", id: "mcp-" + hash(configPath + ":" + server.name).slice(0, 24), location: configPath };
+        const item = { ...server, kind: "mcp", id: "mcp-" + hash(configPath + ":" + server.name).slice(0, 24), location: configPath, configPath, launch: server.launch, ownership: "independent", sourceEvidence: server.source ? "launcher" : "unknown" };
+        if (item.currentKind === "configured" && item.currentVersion && item.source) {
+          const spec = item.source.package + (item.source.type === "npm" ? "@" : "==") + item.currentVersion;
+          const index = server.launch.args.findIndex(arg => arg === spec || arg === "--package=" + spec || arg === "--from=" + spec);
+          if (index >= 0) item.installation = { type: "package-argument", index, prefix: server.launch.args[index].slice(0, -spec.length) };
+        }
         if (!item.managed && !item.source) {
           for (const file of server.localFiles) {
             try {
@@ -359,10 +419,20 @@ export class ExtensionUpdateService {
                 // and dependencies outside its launcher directory.
                 if (!(await fs.stat(file)).isFile()) continue;
                 const info = await gitProvenance(path.dirname(file), gitCache, true) || await packageProvenance(file);
+                if (info?.source?.type === "npm" && !info.installation) {
+                  const previous = [...this.saved.history].reverse().find(entry => entry.method === "npm-cache" && entry.itemIds.includes(item.id) && entry.after === file && ["pending-restart", "prepared", "rolling-back"].includes(entry.state));
+                  if (previous && within(path.join(path.dirname(this.statePath), "mcp-packages", previous.id, "node_modules", ...info.source.package.split("/")), file) && sameSource(previous.source, info.source)) {
+                    info.installation = { type: "npm-cache", root: path.join(path.dirname(this.statePath), "mcp-packages", previous.id, "node_modules", ...info.source.package.split("/")), entry: path.relative(path.join(path.dirname(this.statePath), "mcp-packages", previous.id, "node_modules", ...info.source.package.split("/")), file) };
+                  }
+                }
                 if (info) { Object.assign(item, info); break; }
               }
             } catch { warnings.push("MCP “" + server.name + "” 的本地来源无法读取"); }
           }
+        }
+        if (item.installation?.type === "npm-cache") {
+          const index = server.launch.args.findIndex(arg => path.normalize(arg) === path.normalize(item.location));
+          if (index < 0) item.installation = null; else item.installation.index = index;
         }
         item.originalSource = item.source;
         await add(item);
@@ -383,7 +453,7 @@ export class ExtensionUpdateService {
       catch (error) { if (error.code !== "ENOENT") warnings.push("一个 Skill 文件无法读取"); }
       if (text !== undefined) {
         const name = text.match(/^name:\s*["']?([^\r\n"']+)["']?\s*$/m)?.[1]?.trim() || path.basename(directory);
-        const item = { kind: "skill", name, id: "skill-" + hash(real).slice(0, 24), location: directory, source: null, currentVersion: "", contentHash: hash(text) };
+        const item = { kind: "skill", name, id: "skill-" + hash(real).slice(0, 24), location: directory, source: null, currentVersion: "", contentHash: hash(text), ownership: "independent", sourceEvidence: "unknown" };
         const info = await gitProvenance(real, gitCache);
         if (info) Object.assign(item, info);
         else {
@@ -394,6 +464,7 @@ export class ExtensionUpdateService {
               item.source = normalizeSource({ type: "github", repository: record.sourceUrl || record.source, path: record.skillPath });
               item.baselineTree = record.skillFolderHash;
               item.currentVersion = short(record.skillFolderHash); item.currentKind = "install-record";
+              item.sourceEvidence = "install-record";
             } catch { warnings.push("Skill “" + name + "” 的来源记录无效"); }
           }
         }
@@ -450,7 +521,7 @@ export class ExtensionUpdateService {
       const tree = source.path ? data.tree.find(entry => entry.path === source.path && entry.type === "tree")?.sha : data.sha;
       if (!isSha(tree)) throw new Error("更新来源目录不存在");
       const cached = this.saved.cache[item.id];
-      const confirmed = cached?.fingerprint === item.fingerprint ? cached.result.confirmedTree : "";
+      const confirmed = cached?.fingerprint === item.fingerprint ? cachedResult(cached.result).confirmedTree || "" : "";
       const baseline = confirmed || item.baselineTree;
       const result = { checkedAt, latestVersion: short(tree), status: baseline ? (baseline === tree ? "current" : "available") : "unknown-version", upstreamRepository: source.repository, updateUrl: "https://github.com/" + source.repository + "/commits/" + encodeURIComponent(source.ref) + (source.path ? "/" + source.path.split("/").map(encodeURIComponent).join("/") : ""), notes: "", notesLabel: "该目录的最近变更" };
       if (item.currentCommit && baseline !== tree) {
@@ -469,7 +540,7 @@ export class ExtensionUpdateService {
         if (equal || confirmed) { result.confirmedTree = equal ? tree : confirmed; result.currentVersion = short(result.confirmedTree); result.currentKind = "content"; }
       }
       if (item.locallyModified) result.detail = "本地有修改；结果按 Git 提交比较。更新前请检查本地差异。";
-      if (item.currentKind === "install-record") result.detail = "当前版本依据安装来源记录；此功能不会覆盖本地文件。";
+      if (item.currentKind === "install-record") result.detail = "当前版本依据安装记录；更新前会核对完整目录，保留本地修改。";
       try {
         const commits = await this.requestJson(base + "/commits?sha=" + encodeURIComponent(source.ref) + "&per_page=5" + (source.path ? "&path=" + encodeURIComponent(source.path) : ""), memo);
         if (Array.isArray(commits)) result.notes = commits.map(commit => String(commit.commit?.message || "").split("\n")[0]).filter(Boolean).join("\n").slice(0, 4000);
@@ -497,9 +568,94 @@ export class ExtensionUpdateService {
     }
     return result;
   }
+  async validateOperation(operation) {
+    validateHistory(operation);
+    if (operation.method === "git") {
+      if (!this.items.some(item => operation.itemIds.includes(item.id) && item.installation?.type === "git" && path.resolve(item.installation.root) === operation.root && item.source?.repository === operation.source.repository)) throw new Error("原 Git 安装位置或来源已变化");
+      if (await fs.realpath(operation.root) !== operation.root) throw new Error("Git 安装路径已变化");
+    } else if (operation.method === "skill-copy") {
+      const roots = [path.join(this.home, ".agents/skills"), path.join(this.codexHome, "skills")];
+      if (!roots.some(root => within(root, operation.target) && path.relative(root, operation.target).split(path.sep).every(part => part && !part.startsWith("."))) || !operation.itemIds.includes("skill-" + hash(operation.target).slice(0, 24))) throw new Error("Skill 备份不属于当前安装位置");
+      if (await fs.realpath(path.dirname(operation.backup)) !== path.dirname(operation.backup)) throw new Error("Skill 备份路径已变化");
+      try { if (await fs.realpath(operation.target) !== operation.target) throw new Error("Skill 安装路径已变化"); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    } else {
+      if (operation.configPath !== path.join(this.codexHome, "config.toml") || !operation.itemIds.includes("mcp-" + hash(operation.configPath + ":" + operation.name).slice(0, 24)) || (await fs.lstat(operation.configPath)).isSymbolicLink()) throw new Error("MCP 原配置位置已变化");
+      if (operation.method === "npm-cache") {
+        const root = path.join(path.dirname(this.statePath), "mcp-packages", operation.id, "node_modules", ...operation.source.package.split("/"));
+        if (!path.isAbsolute(operation.before) || !within(root, operation.after)) throw new Error("MCP 更新路径无效");
+        if (await fs.realpath(operation.after) !== operation.after) throw new Error("MCP 新版安装路径已变化");
+      }
+    }
+  }
+  async recordOperation(operation) {
+    const value = structuredClone(operation);
+    validateHistory(value);
+    const index = this.saved.history.findIndex(entry => entry.id === value.id);
+    const previous = this.saved.history[index];
+    if (index < 0) this.saved.history.push(value); else this.saved.history[index] = value;
+    try { await this.persist(); }
+    catch {
+      if (index < 0) this.saved.history.pop(); else this.saved.history[index] = previous;
+      throw new Error("更新记录无法保存；请检查 Plus 数据目录权限");
+    }
+  }
+  async exclusive(activity, work) {
+    if (this.busy) throw new Error("扩展操作正在进行，请完成后再重试");
+    this.activity = activity;
+    const task = Promise.resolve().then(work);
+    this.busy = task;
+    try { return await task; }
+    finally { this.busy = null; this.activity = "idle"; }
+  }
+  async updateItems(queue, memo = new Map()) {
+    this.activity = "updating";
+    const processed = new Set(), changed = new Map();
+    for (const item of queue) {
+      const key = item.installation?.type === "git" ? item.installation.root : item.id;
+      if (processed.has(key)) continue;
+      processed.add(key);
+      const group = item.installation?.type === "git" ? this.items.filter(other => other.installation?.type === "git" && other.installation.root === key) : [item];
+      const itemIds = group.map(other => other.id);
+      for (const member of group) { member.updateState = "updating"; member.updateError = ""; }
+      this.emit("updating");
+      let journal;
+      try {
+        const operation = await this.updater.apply(item, { memo, itemIds, record: async value => { await this.recordOperation(value); journal = structuredClone(value); } });
+        for (const member of group) changed.set(member.id, { operation, result: this.saved.cache[member.id]?.result });
+      } catch (error) {
+        if (journal?.state === "prepared") {
+          // The durable prepared record can recover a completed write whose final save failed.
+          try { await this.validateOperation(journal); journal.state = await this.updater.recover(journal); }
+          catch { journal.state = "failed"; }
+          journal.error = ["updated", "pending-restart"].includes(journal.state) ? "更新已写入，完成记录保存失败；备份仍可回退，请重新扫描" : error instanceof UpdateSkipped ? error.message : "更新未完成，原版本或备份已保留，请检查安装位置";
+          if (journal.state === "failed" && error instanceof UpdateSkipped) journal.state = "skipped";
+          try { await this.recordOperation(journal); }
+          catch { this.saved.history[this.saved.history.findIndex(entry => entry.id === journal.id)] = journal; }
+          if (["updated", "pending-restart"].includes(journal.state)) for (const member of group) changed.set(member.id, { operation: journal, result: this.saved.cache[member.id]?.result });
+        } else {
+          const failure = { id: randomUUID(), itemIds, name: item.name, method: updateSupport(item).method || "unsupported", startedAt: new Date(this.now()).toISOString(), state: error instanceof UpdateSkipped ? "skipped" : "failed", error: error instanceof UpdateSkipped ? error.message : "更新失败：" + (error.message.startsWith("E") ? "请检查文件权限与安装位置" : error.message) };
+          await this.recordOperation(failure);
+        }
+      }
+      await this.discover();
+      this.emit("updating");
+    }
+    for (const item of this.items) {
+      const applied = changed.get(item.id);
+      if (!applied) continue;
+      const result = { ...applied.result, status: "current", latestVersion: item.currentVersion, error: "", previousStatus: "", checkedAt: new Date(this.now()).toISOString() };
+      delete result.confirmedTree;
+      delete result.currentVersion;
+      delete result.currentKind;
+      if (applied.operation.method === "skill-copy") result.confirmedTree = applied.operation.afterTree;
+      Object.assign(item, result);
+      this.saved.cache[item.id] = { fingerprint: item.fingerprint, result };
+    }
+    await this.persist();
+  }
   async check(itemId) {
     if (this.busy) return this.busy;
-    const task = (async () => {
+    return this.exclusive("checking", async () => {
       await this.discover();
       if (itemId && !this.items.some(item => item.id === itemId)) throw new Error("未找到这个扩展项目，请重新扫描");
       const queue = this.items.filter(item => !item.managed && item.source && (!itemId || item.id === itemId));
@@ -515,7 +671,7 @@ export class ExtensionUpdateService {
           try { result = { ...await this.probe(item, memo), error: "", previousStatus: "" }; }
           catch (error) {
             const old = this.saved.cache[item.id];
-            const previous = old?.fingerprint === item.fingerprint ? old.result : {};
+            const previous = old?.fingerprint === item.fingerprint ? cachedResult(old.result) : {};
             result = { ...previous, previousStatus: previous.status === "failed" ? previous.previousStatus : previous.status || "", status: "failed", error: error.message, attemptedAt: new Date(this.now()).toISOString() };
           }
           Object.assign(item, result);
@@ -528,11 +684,9 @@ export class ExtensionUpdateService {
       for (const id of Object.keys(this.saved.cache)) if (!liveIds.has(id)) delete this.saved.cache[id];
       try { await this.persist(); }
       catch { throw new Error("检查已完成，但结果无法保存。请检查 Plus 数据目录权限。"); }
+      if (this.saved.autoUpdate) await this.updateItems(this.items.filter(item => item.status === "available" && (!itemId || item.id === itemId)), memo);
       return this.emit("idle");
-    })();
-    this.busy = task;
-    try { return await task; }
-    finally { this.busy = null; }
+    });
   }
   async handle(request = {}) {
     await this.load();
@@ -540,7 +694,34 @@ export class ExtensionUpdateService {
     if (action === "list") { if (this.mutation) await this.mutation; if (!this.busy) await this.discover(); return this.snapshot(); }
     if (this.mutation) throw new Error("扩展设置正在保存，请稍后重试");
     if (action === "check") return this.check(request.itemId);
-    if (this.busy) throw new Error("扩展检查正在进行，请完成后再修改设置");
+    if (action === "update") return this.exclusive("updating", async () => {
+      await this.discover();
+      const item = this.items.find(entry => entry.id === request.itemId);
+      if (!item || !updateSupport(item).supported || item.status !== "available") throw new Error("此项目没有可验证的更新基线，请先检查更新或补充安装来源");
+      await this.updateItems([item]); return this.emit("idle");
+    });
+    if (action === "rollback") return this.exclusive("rolling-back", async () => {
+      await this.discover();
+      const operation = [...this.saved.history].reverse().find(entry => entry.itemIds.includes(request.itemId) && reversible(entry));
+      if (!operation || operation.state === "rolled-back") throw new Error("这个项目没有可回退的更新");
+      await this.validateOperation(operation);
+      this.emit("rolling-back");
+      const copy = structuredClone(operation);
+      try { await this.updater.rollback(copy, value => this.recordOperation(value)); }
+      catch (error) {
+        if (this.saved.history.find(entry => entry.id === copy.id)?.state === "rolling-back") {
+          copy.state = "rolling-back";
+          copy.state = await this.updater.recover(copy);
+          if (copy.state === "failed") copy.state = operation.state;
+          copy.error = "回退未完整结束，请重新扫描并检查安装位置";
+          await this.recordOperation(copy);
+        }
+        throw error instanceof UpdateSkipped ? error : new Error("回退失败；请检查安装位置与备份，稍后重试");
+      }
+      for (const id of operation.itemIds) delete this.saved.cache[id];
+      await this.persist(); await this.discover(); return this.emit("idle");
+    });
+    if (this.busy) throw new Error("扩展操作正在进行，请完成后再修改设置");
     this.mutation = this.mutate(request);
     try { return await this.mutation; }
     finally { this.mutation = null; }
@@ -548,10 +729,11 @@ export class ExtensionUpdateService {
   async mutate(request) {
     const action = request.action;
     if (action === "preferences") {
-      if (typeof request.autoCheck !== "boolean") throw new Error("每日检查选项无效");
-      const previous = this.saved.autoCheck;
-      this.saved.autoCheck = request.autoCheck;
-      try { await this.persist(); } catch (error) { this.saved.autoCheck = previous; throw new Error("每日检查设置无法保存，请检查文件权限"); }
+      const keys = ["autoCheck", "autoUpdate"].filter(key => key in request);
+      if (!keys.length || keys.some(key => typeof request[key] !== "boolean")) throw new Error("自动检查或更新选项无效");
+      const previous = Object.fromEntries(keys.map(key => [key, this.saved[key]]));
+      for (const key of keys) this.saved[key] = request[key];
+      try { await this.persist(); } catch { Object.assign(this.saved, previous); throw new Error("自动检查或更新设置无法保存，请检查文件权限"); }
       return this.emit("idle");
     }
     if (action === "source") {

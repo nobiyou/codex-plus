@@ -14,6 +14,8 @@
 .codex-plus-extension-state { padding: 2px 7px; border-radius: 4px; font-size: 11px; color: var(--color-token-text-secondary, #6b615b); background: color-mix(in srgb, var(--color-token-text-secondary, #6b615b) 9%, transparent); }
 .codex-plus-extension-item[data-extension-status="available"] .codex-plus-extension-state { color: var(--color-token-text-link-foreground, var(--codex-plus-accent-dark, #751522)); background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 14%, transparent); font-weight: 600; }
 .codex-plus-extension-version { font-size: 12px; font-variant-numeric: tabular-nums; }
+.codex-plus-extension-update-result { font-size: 12px; line-height: 1.6; padding: 6px 8px; border-radius: 4px; background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 8%, transparent); }
+.codex-plus-extension-history [data-extension-history-list] { display: grid; gap: 8px; max-height: 240px; overflow: auto; padding-top: 8px; }
 .codex-plus-extension-link { color: var(--color-token-text-link-foreground, var(--codex-plus-accent-dark, #751522)); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
 .codex-plus-extension-error { white-space: pre-line; color: var(--color-token-text-primary, #30231e); padding: 9px 11px; border-left: 3px solid var(--codex-plus-accent, #b61f31); background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 8%, transparent); font-size: 12px; line-height: 1.6; }
 .codex-plus-extension-panel [hidden] { display: none !important; }

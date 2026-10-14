@@ -6,7 +6,7 @@ import path from "node:path";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { createExtensionUpdatesUI } from "../source/extension-updates-ui.mjs";
-import { ExtensionUpdateService } from "../source/extension-updates.mjs";
+import { ExtensionUpdateService, readMcpConfig } from "../source/extension-updates.mjs";
 
 const { chromium } = process.env.CODEX_PLUS_PLAYWRIGHT_PATH
   ? createRequire(path.resolve(process.env.CODEX_PLUS_PLAYWRIGHT_PATH))("playwright")
@@ -44,6 +44,7 @@ try {
   await page.addStyleTag({ content: ':root { --token-text-primary: var(--color-token-text-primary); --token-text-secondary: var(--color-token-text-secondary); --token-border-light: var(--color-token-border-light); --token-main-surface-primary: var(--color-token-main-surface-primary); }' });
   await page.evaluate('window.fixtureUI=(' + createExtensionUpdatesUI.toString() + ')(window,document);document.getElementById("mount").appendChild(window.fixtureUI.createPanel());window.fixtureUI.refresh();');
   await page.locator("[data-extension-summary]").filter({ hasText: "3 项扩展" }).waitFor();
+  assert.equal(await page.getByLabel("检查后自动更新（默认关闭）", { exact: true }).isChecked(), false);
   assert.equal(await page.getByText("built-in", { exact: true }).count(), 0);
   assert.equal(await page.getByRole("button", { name: "客户端更新", exact: true }).count(), 0);
   await page.getByRole("button", { name: "检查全部", exact: true }).click();
@@ -65,6 +66,32 @@ try {
     assert.notEqual(actionColor, "rgb(117, 21, 34)", "dark mode actions must retain readable contrast");
     await page.screenshot({ path: path.join(process.env.CODEX_PLUS_UI_ARTIFACT_DIR, "extension-updates-dark.png") });
   }
+  assert.equal(await page.getByText("安装归属：独立安装 · 来源依据：启动参数", { exact: true }).isVisible(), true);
+  await page.getByRole("button", { name: "更新", exact: true }).click();
+  await page.locator('[data-extension-update-state="pending-restart"]').waitFor();
+  assert.equal(readMcpConfig(await fs.readFile(path.join(root, ".codex/config.toml"), "utf8")).servers[0].currentVersion, "6.4.0");
+  await page.getByRole("button", { name: "回退上次更新", exact: true }).click();
+  await page.locator('[data-extension-update-state="rolled-back"]').waitFor();
+  assert.equal(readMcpConfig(await fs.readFile(path.join(root, ".codex/config.toml"), "utf8")).servers[0].currentVersion, "6.3.0");
+  await page.getByLabel("检查后自动更新（默认关闭）", { exact: true }).check();
+  await page.waitForFunction(() => document.querySelector("[data-extension-auto-update]").checked && !document.querySelector("[data-extension-auto-update]").disabled);
+  await page.getByRole("button", { name: "检查全部", exact: true }).click();
+  await page.locator('[data-extension-update-state="pending-restart"]').waitFor();
+  await page.waitForFunction(() => document.querySelector('[data-extension-list] [data-extension-operation="rollback"]')?.disabled === false);
+  assert.equal(JSON.parse(await fs.readFile(path.join(root, "plus/updates.json"), "utf8")).autoUpdate, true);
+  assert.equal(await page.locator("[data-extension-update-badge]").isHidden(), true);
+  await page.getByText("更新记录", { exact: true }).click();
+  assert.match(await page.locator("[data-extension-history-list]").textContent(), /重启 MCP 后生效/);
+  if (process.env.CODEX_PLUS_UI_ARTIFACT_DIR) {
+    await page.locator(".codex-plus-pro-settings-content").evaluate(element => { element.scrollTop = 0; });
+    await page.screenshot({ path: path.join(process.env.CODEX_PLUS_UI_ARTIFACT_DIR, "extension-auto-update-dark.png") });
+  }
+  await page.getByLabel("检查后自动更新（默认关闭）", { exact: true }).uncheck();
+  await page.waitForFunction(() => !document.querySelector("[data-extension-auto-update]").disabled);
+  await page.getByRole("button", { name: "回退上次更新", exact: true }).click();
+  await page.locator('[data-extension-update-state="rolled-back"]').waitFor();
+  await page.getByRole("button", { name: "检查", exact: true }).first().click();
+  await page.locator('[data-extension-status="available"]').waitFor();
   await page.locator("[data-extension-auto]").check();
   await page.waitForFunction(() => document.querySelector("[data-extension-auto]").checked && !document.querySelector("[data-extension-auto]").disabled);
   assert.equal(JSON.parse(await fs.readFile(path.join(root, "plus/updates.json"), "utf8")).autoCheck, true);
@@ -137,7 +164,7 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-extension-message]').hidden);
   await page.setViewportSize({ width: 620, height: 700 });
   assert.equal(await page.locator(".codex-plus-pro-settings-content").evaluate(element => element.scrollWidth > element.clientWidth), false);
-  assert.equal(await fs.readFile(path.join(root, ".codex/config.toml"), "utf8"), config);
+  assert.deepEqual(readMcpConfig(await fs.readFile(path.join(root, ".codex/config.toml"), "utf8")), readMcpConfig(config));
   assert.deepEqual(errors, []);
-  console.log("Rendered extension checks passed: discovery, updates, notes escaping, badges, preferences, missing-source list, source mapping, validation recovery, offline recovery, narrow layout.");
+  console.log("Rendered extension checks passed: discovery, auto/manual update, rollback, history, provenance, notes escaping, badges, preferences, missing-source list, source mapping, validation recovery, offline recovery, narrow layout.");
 } finally { await browser.close(); await fs.rm(root, { recursive: true, force: true }); }

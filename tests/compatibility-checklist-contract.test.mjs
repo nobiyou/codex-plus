@@ -81,7 +81,7 @@ test("compatibility settings UI exposes categorized detection and repair control
     fs.readFile(new URL("../source/VERSION", import.meta.url), "utf8"),
   ]);
 
-  assert.ok(source.includes(`const SETTINGS_UI_VERSION = "win-settings-scope-b2-${version.trim()}-service-extensions-v6";`), "settings UI must use the published release version");
+  assert.ok(source.includes(`const SETTINGS_UI_VERSION = "win-settings-scope-b2-${version.trim()}-service-extensions-v7";`), "settings UI must use the published release version");
   assert.match(source, /key: "compatibility", label: "界面兼容性", feature: "compatibility"/);
   for (const label of ["全部", "全局", "对话界面", "编程界面", "设置界面"]) {
     assert.match(source, new RegExp(label));
