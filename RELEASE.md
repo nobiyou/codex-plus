@@ -1,5 +1,26 @@
 # Codex Plus Pro Windows — Release Notes
 
+## 1.8.9 (2026-10-14, GitHub MCP / Skills updates)
+
+### New
+
+- Added **扩展更新** in settings to discover third-party MCP servers and Skills, check upstream versions, and show GitHub release notes or recent changes. Codex-owned components are excluded.
+- Added installation/source evidence and a **需补充** list for associating projects with missing update sources.
+- Added opt-in daily background checks and **检查后自动更新**, both disabled by default. Updates require a verified GitHub source, installation method, and original version; locally modified or unverifiable projects are skipped.
+- Added update history, backups, and rollback for supported Git repositories, copied Skills, npm-cache MCP packages, and fixed npx/uvx package arguments. npm-cache updates install separately and retain the original package. MCP changes take effect after restarting the service.
+
+### Fixed
+
+- Fixed REA and other large MCP packages failing before npm installation because MCP comparison incorrectly used the 512-entry Skill limit. MCP packages now have a separate bounded comparison budget, while Skill limits and local-change protection remain enforced.
+- Installation failures now identify the failed stage and a safe npm error code or timeout, while preserving the original launch configuration and keeping credentials out of displayed errors.
+
+### Verification
+
+- 108 Node tests passed, including large-package updates, rollback, Skill limits, local edits, interrupted operations, and credential redaction.
+- Browser smoke checks passed for discovery, automatic/manual updates, rollback, source mapping, history, offline recovery, and narrow layouts; injector syntax and Git diff checks passed.
+- Installed real REA 6.3.0 and 6.4.0 from the official npm registry in an isolated directory, verified the update and rollback, and confirmed the user's original package and MCP configuration were unchanged.
+- Starting the updated REA MCP service in the active user profile has not been verified.
+
 ## 1.8.8 (2026-10-12, service extensions and themed startup)
 
 ### Changed

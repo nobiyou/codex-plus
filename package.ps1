@@ -7,10 +7,10 @@ $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptRoot
 $SourceDir = Join-Path $ScriptRoot "source"
 $VersionFile = Join-Path $SourceDir "VERSION"
-$Version = "1.8.8"
+$Version = "1.8.9"
 if (Test-Path $VersionFile) {
   $Version = (Get-Content -Path $VersionFile -Raw -ErrorAction SilentlyContinue).Trim()
-  if (-not $Version) { $Version = "1.8.8" }
+  if (-not $Version) { $Version = "1.8.9" }
 }
 
 $DistRoot = Join-Path $RepoRoot "dist"

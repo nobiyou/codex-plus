@@ -37,7 +37,7 @@ let hostFeatureSettings = {
   petMotion: "full",
   modelDensity: "compact",
 };
-const WINDOWS_SCOPE_A_VERSION = "1.8.8";
+const WINDOWS_SCOPE_A_VERSION = "1.8.9";
 const scriptVersion = WINDOWS_SCOPE_A_VERSION + " (Scope B2 pet - Windows)";
 const hostVersionInfo = normalizeVersionInfo({
   plusVersion: options["plus-version"] ?? WINDOWS_SCOPE_A_VERSION,
@@ -1607,7 +1607,7 @@ function buildInjectionSource(css) {
     const OFFICIAL_UPGRADE_BINDING = "__codexPlusProOfficialUpgrade";
     const VERSION_CHECK_BINDING = "__codexPlusProVersionCheck";
     const MANAGED_VERSION_CLEANUP_BINDING = "__codexPlusProManagedVersionCleanup";
-    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.8-service-extensions-v7";
+    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.9-service-extensions-v7";
     const VERSION_INFO = ${JSON.stringify(hostVersionInfo)};
     const FEATURE_ATTRIBUTES = {
       theme: "data-codex-plus-theme",
@@ -3308,7 +3308,7 @@ function buildInjectionSource(css) {
       title.textContent = "Codex Plus Pro";
       const subtitle = document.createElement("div");
       subtitle.className = "codex-plus-pro-settings-subtitle";
-      subtitle.textContent = "Windows 1.8.8 · 主题启动动画、官方宠物开关、兼容性清单与 MSIX";
+      subtitle.textContent = "Windows 1.8.9 · MCP / Skills 更新、主题启动动画与官方宠物";
       heading.append(title, subtitle);
       const closeButton = document.createElement("button");
       closeButton.type = "button";
@@ -4867,7 +4867,7 @@ function buildMainControllerSource() {
     const petShowGuards = new Map();
     const controller = {
       active: true,
-      version: "1.8.8",
+      version: "1.8.9",
       petWindowVisibility,
       petHiddenByUs,
       petShowGuards,

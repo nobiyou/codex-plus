@@ -1,8 +1,8 @@
-# Codex Plus Pro for Windows (Scope B2) 1.8.8
+# Codex Plus Pro for Windows (Scope B2) 1.8.9
 
 Theme-oriented Windows launcher for official Microsoft Store ChatGPT / Codex (`OpenAI.Codex`) with Codex Plus Pro UI enhancements and local official MSIX version management.
 
-**Status: Scope B2 1.8.8** — theme + accent + wallpaper/logo + light/dark + themed startup animation + native model picker styling + official pet show/hide control + compatibility checklist + official MSIX local-version upgrade.
+**Status: Scope B2 1.8.9** — theme + accent + wallpaper/logo + light/dark + themed startup animation + native model picker styling + official pet show/hide control + compatibility checklist + GitHub MCP/Skill update checks and optional automatic updates + official MSIX local-version upgrade.
 Picture-in-picture has been removed.
 
 ## Requirements
@@ -51,12 +51,21 @@ powershell -ExecutionPolicy Bypass -File .\uninstall-shortcuts.ps1
 - "恢复默认" resets theme + accent + wallpaper + logo to Scope A defaults
 - **Themed native model picker** on the composer, with Codex retaining model and effort state
 - **Desktop pet**: avatar-overlay visibility control + dismiss persistence (`pet-notifications.js`)
+- **MCP / Skills updates**: check third-party GitHub projects, view release notes and provenance, complete missing sources, and optionally update verified installations with backups and rollback
 - **Official MSIX upgrade path**: FE3 Direct resolves the official Microsoft CDN package, imports it as a local managed version, and keeps only the newest managed version by default
 
 ## Notes on B2
 
 - All major mac-aligned UI features now ship on Windows except any future extras.
 - Pet requires Codex's native avatar-overlay window to exist.
+
+## MCP / Skills updates
+
+Open settings → **扩展更新** to scan installed MCP servers and Skills, check their upstream versions, and view GitHub release notes or recent changes. The **需补充** list collects projects without a confirmed update source so you can associate their GitHub repository or package source. Provenance labels show the installation and source evidence; Codex-owned components are excluded.
+
+Daily background checks and **检查后自动更新** are both off by default. Automatic updates apply only to GitHub projects with a verified source, installation method, and original version. Git repositories and copied Skills retain backups for rollback; npm-cache MCP packages install into a separate Plus-managed directory while preserving the original cache. Locally modified or unverifiable installations are skipped. Supported fixed npx/uvx package arguments change only the configured version. MCP updates and rollbacks take effect when the MCP service restarts.
+
+Version 1.8.9 also fixes large MCP packages such as REA being rejected by the smaller Skill comparison limit. Installation failures now identify the failed stage and a safe error code without exposing credentials.
 
 ## Official MSIX local upgrade
 
