@@ -1,8 +1,8 @@
 // Serialized into the renderer by injector.mjs. Keep this function self-contained.
 export function createExtensionUpdatesUI(window, document) {
-  if (window.__codexPlusProExtensionsUI?.version === 1) return window.__codexPlusProExtensionsUI;
+  if (window.__codexPlusProExtensionsUI?.version === 2) return window.__codexPlusProExtensionsUI;
   const binding = "__codexPlusProExtensionUpdates";
-  const labels = { available: "有更新", current: "已是最新", ahead: "本地版本较新", "unknown-version": "本地版本未知", different: "内容不同", managed: "托管更新", "no-source": "未配置来源", unchecked: "未检查", checking: "检查中", failed: "检查失败" };
+  const labels = { available: "有更新", current: "已是最新", ahead: "本地版本较新", "unknown-version": "本地版本未知", different: "内容不同", managed: "远程服务", "no-source": "未配置来源", unchecked: "未检查", checking: "检查中", failed: "检查失败" };
   let state = { items: [], warnings: [], autoCheck: false, state: "idle", updateCount: 0 };
   let panel = null, category = "mcp", pending = false, watchdog = null;
   const drafts = new Map();
@@ -23,12 +23,12 @@ export function createExtensionUpdatesUI(window, document) {
   const safeLink = (url, text) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || !["github.com", "www.npmjs.com", "pypi.org", "developers.openai.com", "learn.chatgpt.com"].includes(parsed.hostname)) return null;
+      if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password || parsed.search || !["github.com", "www.npmjs.com", "pypi.org"].includes(parsed.hostname)) return null;
       const link = element("a", text, "codex-plus-extension-link");
       link.href = parsed.href; link.target = "_blank"; link.rel = "noopener noreferrer"; return link;
     } catch { return null; }
   };
-  const sourceLabel = source => !source ? "尚未关联可检查的来源" : source.type === "github" ? source.repository + (source.path ? "/" + source.path : "") + " · " + source.ref : source.type + " · " + source.package;
+  const sourceLabel = source => !source ? "尚未关联可检查的来源" : source.type === "github" ? "GitHub · " + source.repository + (source.path ? "/" + source.path : "") + " · " + source.ref : source.type + " · " + source.package;
   const busy = () => pending || state.state === "checking";
   const armWatchdog = () => {
     window.clearTimeout(watchdog);
@@ -115,8 +115,7 @@ export function createExtensionUpdatesUI(window, document) {
     const currentLabel = { configured: "固定配置", "install-record": "安装记录", commit: "本地提交", content: "本地目录", provided: "已填写版本" }[item.currentKind] || "当前版本";
     card.appendChild(element("p", currentLabel + "：" + (item.currentVersion || "未知") + (item.latestVersion ? "  →  最新：" + item.latestVersion : ""), "codex-plus-extension-version"));
     if (item.managed) {
-      const descriptions = { codex: "随 Codex 客户端更新，可在“版本”页检查客户端。", plugin: "由插件管理；缓存目录可能保留多个版本，请在原生插件设置中检查。", remote: "远程服务由提供方维护，本机没有可比较的安装版本。" };
-      card.appendChild(element("p", descriptions[item.managed] || "由原安装方式管理。", "codex-plus-extension-muted"));
+      card.appendChild(element("p", "远程服务由提供方维护，本机没有可比较的安装版本。", "codex-plus-extension-muted"));
     } else {
       card.appendChild(element("p", sourceLabel(item.source), "codex-plus-extension-muted"));
       if (item.status === "unknown-version") card.appendChild(element("p", "已查到上游版本；本地版本无法确认，暂不判断是否需要更新。", "codex-plus-extension-muted"));
@@ -128,7 +127,11 @@ export function createExtensionUpdatesUI(window, document) {
     if (item.checkedAt) card.appendChild(element("p", (item.status === "failed" ? "上次成功检查：" : "检查时间：") + time(item.checkedAt), "codex-plus-extension-muted"));
     const actions = element("div", undefined, "codex-plus-extension-actions");
     if (!item.managed) { const check = button("检查", () => request({ action: "check", itemId: item.id })); check.disabled = busy() || !item.source; actions.appendChild(check); }
-    if (item.managed === "codex") actions.appendChild(button("客户端更新", () => document.querySelector('[data-settings-section-target="version"]')?.click()));
+    const repository = item.source?.type === "github" ? item.source.repository : item.upstreamRepository;
+    if (repository) {
+      if (item.source?.type !== "github") card.appendChild(element("p", "GitHub · " + repository, "codex-plus-extension-muted"));
+      const upstream = safeLink("https://github.com/" + repository, "GitHub 仓库 ↗"); if (upstream) actions.appendChild(upstream);
+    }
     const link = safeLink(item.updateUrl, "更新入口 ↗"); if (link) actions.appendChild(link);
     if (item.notes) {
       const details = element("details", undefined, "codex-plus-extension-notes");
@@ -177,7 +180,7 @@ export function createExtensionUpdatesUI(window, document) {
   };
   window.addEventListener("pagehide", () => window.clearTimeout(watchdog), { once: true });
   const api = {
-    version: 1,
+    version: 2,
     refresh: () => request({ action: "list" }),
     indicators,
     createPanel() {
@@ -195,7 +198,8 @@ export function createExtensionUpdatesUI(window, document) {
       for (const kind of ["mcp", "skill"]) { const tab = button(kind === "mcp" ? "MCP" : "Skills", () => { category = kind; render(); }); tab.setAttribute("data-extension-category", kind); categories.appendChild(tab); }
       const message = element("p", "", "codex-plus-extension-error"); message.setAttribute("data-extension-message", "true"); message.setAttribute("role", "alert"); message.hidden = true;
       const list = element("div", undefined, "codex-plus-extension-list"); list.setAttribute("data-extension-list", "true");
-      panel.append(summary, timestamp, actions, auto, categories, message, list); render(); return panel;
+      const scope = element("p", "查看第三方 MCP 与 Skills 的上游版本和更新内容，优先关联 GitHub 项目。", "codex-plus-extension-muted");
+      panel.append(scope, summary, timestamp, actions, auto, categories, message, list); render(); return panel;
     },
   };
   window.__codexPlusProExtensionsUI = api;

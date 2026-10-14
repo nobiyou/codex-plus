@@ -13,9 +13,12 @@ const { chromium } = process.env.CODEX_PLUS_PLAYWRIGHT_PATH
   : await import("playwright");
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "plus-extensions-browser-"));
 const write = async (file, text) => { const full = path.join(root, file); await fs.mkdir(path.dirname(full), { recursive: true }); await fs.writeFile(full, text); };
-const config = '[mcp_servers.rea]\ncommand="npx"\nargs=["rea-agents@6.3.0"]\n';
+const bundled = path.join(root, "Codex/resources/node_repl.exe").replaceAll("\\", "/");
+const config = '[mcp_servers.rea]\ncommand="npx"\nargs=["rea-agents@6.3.0"]\n' + `[mcp_servers.built-in]\ncommand=${JSON.stringify(bundled)}\n`;
 await write(".codex/config.toml", config);
 await write(".agents/skills/my-skill/SKILL.md", "---\nname: my-skill\ndescription: fixture\n---\n");
+await write(".codex/skills/.system/built-in/SKILL.md", "---\nname: built-in\n---\n");
+await write(".codex/plugins/cache/openai-bundled/helper/1.0.0/skills/helper/SKILL.md", "---\nname: built-in-plugin\n---\n");
 let offline = false;
 const service = new ExtensionUpdateService({ home: root, codexHome: path.join(root, ".codex"), statePath: path.join(root, "plus/updates.json"), fetcher: async url => {
   if (offline) throw new Error("offline");
@@ -41,9 +44,13 @@ try {
   await page.addStyleTag({ content: ':root { --token-text-primary: var(--color-token-text-primary); --token-text-secondary: var(--color-token-text-secondary); --token-border-light: var(--color-token-border-light); --token-main-surface-primary: var(--color-token-main-surface-primary); }' });
   await page.evaluate('window.fixtureUI=(' + createExtensionUpdatesUI.toString() + ')(window,document);document.getElementById("mount").appendChild(window.fixtureUI.createPanel());window.fixtureUI.refresh();');
   await page.locator("[data-extension-summary]").filter({ hasText: "2 项扩展" }).waitFor();
+  assert.equal(await page.getByText("built-in", { exact: true }).count(), 0);
+  assert.equal(await page.getByRole("button", { name: "客户端更新", exact: true }).count(), 0);
   await page.getByRole("button", { name: "检查全部", exact: true }).click();
   await page.locator('[data-extension-status="available"]').waitFor();
   assert.equal(await page.locator("[data-extension-update-badge]").textContent(), "1");
+  assert.equal(await page.getByRole("link", { name: "GitHub 仓库 ↗", exact: true }).getAttribute("href"), "https://github.com/example/rea");
+  assert.equal(await page.getByRole("link", { name: "更新入口 ↗", exact: true }).getAttribute("href"), "https://github.com/example/rea/releases/tag/v6.4.0");
   await page.getByText("版本发布说明", { exact: true }).click();
   assert.equal(await page.evaluate(() => window.untrusted), undefined);
   assert.match(await page.locator(".codex-plus-extension-notes pre").textContent(), /Improved MCP tools/);
@@ -68,6 +75,8 @@ try {
   await page.waitForFunction(() => !document.querySelector("[data-extension-item] .codex-plus-extension-actions button").disabled);
   await page.getByRole("button", { name: "检查", exact: true }).click();
   await page.locator('[data-extension-status="different"]').waitFor();
+  assert.equal(await page.getByRole("link", { name: "GitHub 仓库 ↗", exact: true }).getAttribute("href"), "https://github.com/example/skills");
+  assert.equal(await page.getByRole("link", { name: "更新入口 ↗", exact: true }).getAttribute("href"), "https://github.com/example/skills/commits/HEAD");
   await page.getByLabel("公开 GitHub 仓库", { exact: true }).fill("https://token@github.com/example/skills");
   await page.getByRole("button", { name: "保存来源", exact: true }).click();
   await page.locator("[data-extension-message]").filter({ hasText: "凭证" }).waitFor();

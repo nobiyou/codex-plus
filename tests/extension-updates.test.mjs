@@ -92,8 +92,108 @@ test("a directly launched package uses its installed manifest and surfaces exact
   assert.equal(item.status, "available");
   assert.equal(item.latestVersion, "6.4.0");
   assert.match(item.notes, /New tools and fixes/);
+  assert.equal(item.upstreamRepository, "example/server");
+  assert.equal(item.updateUrl, "https://github.com/example/server/releases/tag/v6.4.0");
   assert.equal(result.updateCount, 1);
   assert.equal(f.events.some(event => event.state === "checking"), true);
+});
+
+test("client-owned components are excluded before source overrides, cache restoration and checks", async t => {
+  const requests = [];
+  const f = await fixture(t, async url => {
+    requests.push(url);
+    if (url.includes("registry.npmjs.org")) return response({ version: "1.0.0" });
+    if (url.includes("git/trees")) return response({ sha: "a".repeat(40), tree: [{ path: "skills/custom", type: "tree", sha: "b".repeat(40) }] });
+    return response([]);
+  });
+  const bundled = await f.write("Codex/resources/node_repl.exe", "fixture");
+  const configPath = await f.write(".codex/config.toml", `[mcp_servers.bundled]\ncommand=${JSON.stringify(bundled.replaceAll("\\", "/"))}\n[mcp_servers.node_repl]\ncommand="npx"\nargs=["third-party-mcp@1.0.0"]\n`);
+  const systemSkill = await f.write(".codex/skills/.system/helper/SKILL.md", "---\nname: built-in\n---\n");
+  await f.write(".agents/skills/custom/SKILL.md", "---\nname: custom\n---\n");
+  await f.write(".agents/.skill-lock.json", JSON.stringify({ version: 3, skills: { custom: { sourceType: "github", source: "openai/skills", skillPath: "skills/custom/SKILL.md", skillFolderHash: "b".repeat(40) } } }));
+  for (const marketplace of ["openai-bundled", "openai-primary-runtime", "openai-curated-remote", "openai-curated"]) {
+    await f.write(`.codex/plugins/cache/${marketplace}/helper/1.0.0/skills/helper/SKILL.md`, "---\nname: plugin-helper\n---\n");
+  }
+  const alias = path.join(f.home, ".agents/skills/built-in-alias");
+  await fs.symlink(path.dirname(systemSkill), alias, "junction");
+  await fs.symlink(path.join(f.home, ".codex/plugins/cache/openai-bundled/helper/1.0.0/skills/helper"), path.join(f.home, ".agents/skills/plugin-alias"), "junction");
+  const excludedId = "mcp-" + createHash("sha256").update(configPath + ":bundled").digest("hex").slice(0, 24);
+  const excludedSkillId = "skill-" + createHash("sha256").update(await fs.realpath(path.dirname(systemSkill))).digest("hex").slice(0, 24);
+  await f.write("plus/updates.json", JSON.stringify({ schemaVersion: 1, autoCheck: true, lastCheckedAt: new Date().toISOString(), sources: Object.fromEntries([excludedId, excludedSkillId].map(id => [id, { source: { type: "github", repository: "example/client" } }])), cache: Object.fromEntries([excludedId, excludedSkillId].map(id => [id, { result: { status: "available" } }])) }));
+  await f.service.maybeCheck();
+  assert.deepEqual(f.events.at(-1).items.map(item => item.name).sort(), ["custom", "node_repl"]);
+  assert.equal(f.events.at(-1).updateCount, 0);
+  assert.equal(requests.length, 0);
+  const checked = await f.service.handle({ action: "check" });
+  assert.deepEqual(checked.items.map(item => item.name).sort(), ["custom", "node_repl"]);
+  assert.equal(checked.updateCount, 0);
+  assert.equal(requests.some(url => url.includes("example/client")), false);
+  assert.equal(requests.some(url => url.includes("openai/skills")), true, "a user-installed open source project is not excluded by its GitHub owner");
+  assert.equal(requests.some(url => url.includes("third-party-mcp")), true, "a third-party MCP with the same name as a built-in remains checkable");
+  const saved = JSON.parse(await fs.readFile(path.join(f.home, "plus/updates.json"), "utf8"));
+  assert.equal(excludedId in saved.cache, false);
+  assert.equal(excludedSkillId in saved.cache, false);
+  await assert.rejects(f.service.handle({ action: "source", itemId: excludedId, source: { type: "github", repository: "example/client" } }), /项目/);
+  assert.equal(f.events.every(event => event.items.every(item => ![excludedId, excludedSkillId].includes(item.id))), true);
+});
+
+test("installed MCP manifests expose GitHub provenance and missing releases keep a GitHub entry", async t => {
+  const f = await fixture(t, async url => url.includes("registry.npmjs.org") ? response({ version: "2.0.0" }) : new Response("{}", { status: 404 }));
+  const script = await f.write("cache/node_modules/project-mcp/scripts/main.mjs", "// fixture");
+  await f.write("cache/node_modules/project-mcp/package.json", JSON.stringify({ name: "project-mcp", version: "1.0.0", repository: { url: "git+https://github.com/example/project.git" } }));
+  await f.write(".codex/config.toml", `[mcp_servers.project]\ncommand="node"\nargs=[${JSON.stringify(script.replaceAll("\\", "/"))}]\n`);
+  assert.equal((await f.service.handle({ action: "list" })).items[0].upstreamRepository, "example/project");
+  const item = (await f.service.handle({ action: "check" })).items[0];
+  assert.equal(item.status, "available");
+  assert.equal(item.upstreamRepository, "example/project");
+  assert.equal(item.updateUrl, "https://github.com/example/project/releases");
+  assert.match(item.notes, /未提供/);
+  // A manually selected package must not inherit the old package's repository.
+  await f.service.handle({ action: "source", itemId: item.id, source: { type: "npm", package: "another-project" } });
+  const changed = (await f.service.handle({ action: "check" })).items[0];
+  assert.equal(changed.upstreamRepository, "");
+  assert.match(changed.updateUrl, /npmjs.com\/package\/another-project/);
+});
+
+test("PyPI MCPs use their GitHub project and version release even without a release body", async t => {
+  const f = await fixture(t, async url => {
+    if (url.includes("pypi.org")) return response({ info: { version: "2.0.0", project_urls: { Repository: "https://github.com/example/python-mcp" } } });
+    if (url.includes("/tags/v")) return new Response("{}", { status: 404 });
+    return response({ body: "" });
+  });
+  await f.write(".codex/config.toml", '[mcp_servers.python]\ncommand="uvx"\nargs=["python-mcp==1.0.0"]\n');
+  const item = (await f.service.handle({ action: "check" })).items[0];
+  assert.equal(item.status, "available");
+  assert.equal(item.upstreamRepository, "example/python-mcp");
+  assert.equal(item.updateUrl, "https://github.com/example/python-mcp/releases/tag/2.0.0");
+  assert.match(item.notes, /未提供/);
+});
+
+test("GitHub MCP checkouts compare the full project even when they contain a package manifest", async t => {
+  const requests = [];
+  const f = await fixture(t, async url => {
+    requests.push(url);
+    if (url.includes("git/trees")) return response({ sha: "a".repeat(40), tree: [{ path: "scripts", type: "tree", sha: "b".repeat(40) }] });
+    if (url.includes("/compare/")) return response({ status: "ahead" });
+    return response([{ commit: { message: "Update project dependencies" } }]);
+  });
+  const script = await f.write("projects/github-mcp/scripts/main.mjs", "// fixture");
+  await f.write("projects/github-mcp/package.json", JSON.stringify({ name: "unpublished-mcp", version: "1.0.0" }));
+  const directory = path.join(f.home, "projects/github-mcp");
+  const git = promisify(execFile);
+  const run = args => git("git", ["-C", directory, ...args], { windowsHide: true });
+  await run(["init"]);
+  await run(["config", "user.name", "Fixture"]);
+  await run(["config", "user.email", "fixture@example.invalid"]);
+  await run(["remote", "add", "origin", "https://github.com/example/github-mcp.git"]);
+  await run(["add", "."]);
+  await run(["commit", "-m", "fixture"]);
+  await f.write(".codex/config.toml", `[mcp_servers.github]\ncommand="node"\nargs=[${JSON.stringify(script.replaceAll("\\", "/"))}]\n`);
+  const item = (await f.service.handle({ action: "check" })).items[0];
+  assert.deepEqual(item.source, { type: "github", repository: "example/github-mcp", path: "", ref: "HEAD" });
+  assert.equal(item.status, "available");
+  assert.equal(requests.some(url => url.includes("registry.npmjs.org")), false);
+  assert.equal(item.updateUrl, "https://github.com/example/github-mcp/commits/HEAD");
 });
 
 test("unpinned launchers show upstream versions without claiming the installed version is outdated", async t => {

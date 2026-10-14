@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const DAY = 86400000;
+const CHECK_RESULT_VERSION = 2;
 const hash = value => createHash("sha256").update(value).digest("hex");
 const isSha = value => /^[a-f0-9]{40}$/i.test(value || "");
 const short = value => String(value || "").slice(0, 10);
@@ -186,6 +187,12 @@ function githubRepository(value) {
     return normalizeSource({ type: "github", repository: value }).repository;
   } catch { return null; }
 }
+function packageRepository(metadata, type) {
+  const candidates = type === "npm"
+    ? [typeof metadata?.repository === "object" ? metadata.repository?.url : metadata?.repository, metadata?.homepage?.split("#")[0]]
+    : Object.values(metadata?.project_urls || {});
+  return candidates.map(githubRepository).find(Boolean) || "";
+}
 export function compareVersions(a, b) {
   const parse = value => {
     const match = String(value).match(/^v?(\d+(?:\.\d+)*)(?:-([\w.-]+))?(?:\+[\w.-]+)?$/);
@@ -217,7 +224,7 @@ async function runGit(directory, args) {
     return result.stdout.trim();
   } catch { return ""; } // Missing Git/untrusted checkout remains an unknown source.
 }
-async function gitProvenance(directory, cache) {
+async function gitProvenance(directory, cache, wholeRepository = false) {
   let root = directory;
   while (true) {
     try { await fs.lstat(path.join(root, ".git")); break; }
@@ -229,7 +236,7 @@ async function gitProvenance(directory, cache) {
   if (!cache.has(root)) cache.set(root, (async () => ({ repository: githubRepository(await runGit(root, ["config", "--get", "remote.origin.url"])), commit: await runGit(root, ["rev-parse", "HEAD"]) }))());
   const info = await cache.get(root);
   if (!info.repository || !isSha(info.commit)) return null;
-  const subdir = path.relative(root, directory).split(path.sep).join("/");
+  const subdir = wholeRepository ? "" : path.relative(root, directory).split(path.sep).join("/");
   const tree = await runGit(root, ["rev-parse", subdir ? `HEAD:${subdir}` : "HEAD^{tree}"]);
   const dirty = await runGit(root, ["status", "--porcelain", "--", subdir || "."]);
   return { source: normalizeSource({ type: "github", repository: info.repository, path: subdir }), baselineTree: isSha(tree) ? tree : "", currentCommit: info.commit, currentVersion: short(info.commit), currentKind: "commit", locallyModified: !!dirty };
@@ -242,7 +249,7 @@ async function packageProvenance(file) {
     if (manifest) {
       const spec = packageSpec(manifest.name, "npm");
       if (!spec || typeof manifest.version !== "string") return null;
-      return { ...spec, currentVersion: manifest.version, currentKind: "installed", location: file };
+      return { ...spec, currentVersion: manifest.version, currentKind: "installed", location: file, upstreamRepository: packageRepository(manifest, "npm") };
     }
     const parent = path.dirname(directory);
     if (directory === parent) break;
@@ -307,20 +314,32 @@ export class ExtensionUpdateService {
   emit(state, error) { const result = this.snapshot(state, error); this.onState(result); return result; }
   async discover() {
     const items = [], warnings = [], realPaths = new Set(), gitCache = new Map();
+    // Exclude by installation ownership, including aliases to built-in Skills.
+    // A user-installed GitHub project is not excluded by its name or GitHub owner.
+    const agentsRoot = path.join(this.home, ".agents", "skills");
+    const ownedRoots = [path.join(agentsRoot, ".system"), path.join(this.codexHome, "skills", ".system"), ...["openai-bundled", "openai-primary-runtime", "openai-curated-remote", "openai-curated"].map(market => path.join(this.codexHome, "plugins", "cache", market))];
+    for (const root of [...ownedRoots]) {
+      try { ownedRoots.push(await fs.realpath(root)); }
+      catch (error) { if (error.code !== "ENOENT") warnings.push("一个内置组件目录无法识别"); }
+    }
+    const clientOwned = directory => ownedRoots.some(root => {
+      const relative = path.relative(root, directory);
+      return !relative || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep));
+    });
     const add = async item => {
       const override = this.saved.sources[item.id];
       if (override && !item.managed) {
         item.source = normalizeSource(override.source);
         if (override.currentVersion) { item.currentVersion = override.currentVersion; item.currentKind = "provided"; }
         // A different repository/directory cannot reuse an automatically inferred tree.
-        if (item.originalSource && JSON.stringify(item.source) !== JSON.stringify(item.originalSource)) item.baselineTree = "";
+        if (item.originalSource && JSON.stringify(item.source) !== JSON.stringify(item.originalSource)) { item.baselineTree = ""; item.upstreamRepository = ""; }
       }
       delete item.originalSource;
       if (item.kind === "skill" && item.source?.type === "github" && !item.managed) {
         try { item.localBlobs = await folderBlobs(item.location); item.contentHash = hash(JSON.stringify(item.localBlobs)); }
         catch { item.localComparisonUnavailable = true; warnings.push("Skill “" + item.name + "” 的本地内容无法完整比较"); }
       }
-      item.fingerprint = hash(JSON.stringify([item.id, item.currentVersion, item.source, item.baselineTree, item.contentHash, item.locallyModified]));
+      item.fingerprint = hash(JSON.stringify([CHECK_RESULT_VERSION, item.id, item.currentVersion, item.source, item.baselineTree, item.contentHash, item.locallyModified, item.upstreamRepository]));
       delete item.contentHash;
       const cached = this.saved.cache[item.id];
       Object.assign(item, cached?.fingerprint === item.fingerprint ? cached.result : { status: item.managed ? "managed" : item.source ? "unchecked" : "no-source", checkedAt: "", latestVersion: "", notes: "" });
@@ -330,12 +349,18 @@ export class ExtensionUpdateService {
     try {
       const config = readMcpConfig(await readSmall(configPath));
       for (const server of config.servers) {
+        if (server.localFiles.some(file => clientOwned(file) || (/node_repl\.exe$/i.test(file) && /[\\/]resources[\\/]/i.test(file)))) continue;
         const item = { ...server, kind: "mcp", id: "mcp-" + hash(configPath + ":" + server.name).slice(0, 24), location: configPath };
         if (!item.managed && !item.source) {
           for (const file of server.localFiles) {
             try {
-              if (/node_repl\.exe$/i.test(file) && /[\\/]resources[\\/]/i.test(file)) { item.managed = "codex"; break; }
-              if (/\.(?:mjs|cjs|js)$/i.test(file)) { const info = await packageProvenance(file) || await gitProvenance(path.dirname(file), gitCache); if (info) { Object.assign(item, info); break; } }
+              if (/\.(?:mjs|cjs|js)$/i.test(file)) {
+                // A Git checkout owns the whole MCP project, including modules
+                // and dependencies outside its launcher directory.
+                if (!(await fs.stat(file)).isFile()) continue;
+                const info = await gitProvenance(path.dirname(file), gitCache, true) || await packageProvenance(file);
+                if (info) { Object.assign(item, info); break; }
+              }
             } catch { warnings.push("MCP “" + server.name + "” 的本地来源无法读取"); }
           }
         }
@@ -346,33 +371,30 @@ export class ExtensionUpdateService {
     let lock = null;
     try { lock = await optionalJson(path.join(this.home, ".agents", ".skill-lock.json")); }
     catch { warnings.push("Skill 安装来源记录无法读取"); }
-    const agentsRoot = path.join(this.home, ".agents", "skills");
-    const visit = async (directory, depth, managed = "") => {
-      if (depth > 5 || items.length >= 500) return;
+    const visit = async (directory, depth) => {
+      if (depth > 5 || items.length >= 500 || clientOwned(directory)) return;
       let real;
       try { real = await fs.realpath(directory); }
       catch (error) { if (error.code !== "ENOENT") warnings.push("一个 Skill 目录无法读取"); return; }
-      if (realPaths.has(real)) return;
+      if (realPaths.has(real) || clientOwned(real)) return;
       realPaths.add(real);
       let text;
       try { text = await readSmall(path.join(real, "SKILL.md"), 512 * 1024); }
       catch (error) { if (error.code !== "ENOENT") warnings.push("一个 Skill 文件无法读取"); }
       if (text !== undefined) {
         const name = text.match(/^name:\s*["']?([^\r\n"']+)["']?\s*$/m)?.[1]?.trim() || path.basename(directory);
-        const item = { kind: "skill", name, id: "skill-" + hash(real).slice(0, 24), location: directory, source: null, currentVersion: "", contentHash: hash(text), managed };
-        if (!managed) {
-          const info = await gitProvenance(real, gitCache);
-          if (info) Object.assign(item, info);
-          else {
-            const record = lock?.version >= 3 && lock.skills?.[path.basename(directory)];
-            // Lock entries only own their installed location, not same-named copies.
-            if (record?.sourceType === "github" && path.dirname(directory) === agentsRoot && isSha(record.skillFolderHash)) {
-              try {
-                item.source = normalizeSource({ type: "github", repository: record.sourceUrl || record.source, path: record.skillPath });
-                item.baselineTree = record.skillFolderHash;
-                item.currentVersion = short(record.skillFolderHash); item.currentKind = "install-record";
-              } catch { warnings.push("Skill “" + name + "” 的来源记录无效"); }
-            }
+        const item = { kind: "skill", name, id: "skill-" + hash(real).slice(0, 24), location: directory, source: null, currentVersion: "", contentHash: hash(text) };
+        const info = await gitProvenance(real, gitCache);
+        if (info) Object.assign(item, info);
+        else {
+          const record = lock?.version >= 3 && lock.skills?.[path.basename(directory)];
+          // Lock entries only own their installed location, not same-named copies.
+          if (record?.sourceType === "github" && path.dirname(directory) === agentsRoot && isSha(record.skillFolderHash)) {
+            try {
+              item.source = normalizeSource({ type: "github", repository: record.sourceUrl || record.source, path: record.skillPath });
+              item.baselineTree = record.skillFolderHash;
+              item.currentVersion = short(record.skillFolderHash); item.currentKind = "install-record";
+            } catch { warnings.push("Skill “" + name + "” 的来源记录无效"); }
           }
         }
         item.originalSource = item.source;
@@ -382,34 +404,12 @@ export class ExtensionUpdateService {
       try { directories = await fs.readdir(real, { withFileTypes: true }); }
       catch { warnings.push("一个 Skill 目录无法扫描"); return; }
       for (const child of directories.sort((a, b) => a.name.localeCompare(b.name))) {
-        if (child.name.endsWith(".disabled") || (child.name.startsWith(".") && child.name !== ".system")) continue;
-        if (child.isDirectory() || child.isSymbolicLink()) await visit(path.join(directory, child.name), depth + 1, managed || (child.name === ".system" ? "codex" : ""));
+        if (child.name.endsWith(".disabled") || child.name.startsWith(".")) continue;
+        if (child.isDirectory() || child.isSymbolicLink()) await visit(path.join(directory, child.name), depth + 1);
       }
     };
     await visit(agentsRoot, 0);
     await visit(path.join(this.codexHome, "skills"), 0);
-    // Plugin caches can contain several releases. They are shown as managed
-    // packages, never incorrectly promoted to an "installed latest" version.
-    try {
-      const cacheRoot = path.join(this.codexHome, "plugins", "cache");
-      for (const marketplace of await fs.readdir(cacheRoot, { withFileTypes: true })) {
-        if (!marketplace.isDirectory()) continue;
-        const marketPath = path.join(cacheRoot, marketplace.name);
-        for (const plugin of await fs.readdir(marketPath, { withFileTypes: true })) {
-          if (!plugin.isDirectory()) continue;
-          const pluginPath = path.join(marketPath, plugin.name);
-          const versions = await fs.readdir(pluginPath, { withFileTypes: true });
-          if (!versions.some(version => version.isDirectory())) continue;
-          let hasSkills = false;
-          for (const version of versions) {
-            if (!version.isDirectory()) continue;
-            try { const skills = await fs.readdir(path.join(pluginPath, version.name, "skills")); if (skills.length) hasSkills = true; }
-            catch (error) { if (error.code !== "ENOENT") warnings.push("一个插件的 Skill 缓存无法读取"); }
-          }
-          if (hasSkills) await add({ kind: "skill", name: plugin.name + " · 插件 Skills", id: "plugin-" + hash(pluginPath).slice(0, 24), location: pluginPath, managed: "plugin", source: null, currentVersion: "" });
-        }
-      }
-    } catch (error) { if (error.code !== "ENOENT") warnings.push("插件 Skill 缓存无法扫描"); }
     this.items = items; this.warnings = [...new Set(warnings)];
     if (items.length >= 500) this.warnings.push("扩展数量超过扫描上限，部分项目未显示");
   }
@@ -452,7 +452,7 @@ export class ExtensionUpdateService {
       const cached = this.saved.cache[item.id];
       const confirmed = cached?.fingerprint === item.fingerprint ? cached.result.confirmedTree : "";
       const baseline = confirmed || item.baselineTree;
-      const result = { checkedAt, latestVersion: short(tree), status: baseline ? (baseline === tree ? "current" : "available") : "unknown-version", updateUrl: "https://github.com/" + source.repository + "/commits/" + encodeURIComponent(source.ref) + (source.path ? "/" + source.path.split("/").map(encodeURIComponent).join("/") : ""), notes: "", notesLabel: "该目录的最近变更" };
+      const result = { checkedAt, latestVersion: short(tree), status: baseline ? (baseline === tree ? "current" : "available") : "unknown-version", upstreamRepository: source.repository, updateUrl: "https://github.com/" + source.repository + "/commits/" + encodeURIComponent(source.ref) + (source.path ? "/" + source.path.split("/").map(encodeURIComponent).join("/") : ""), notes: "", notesLabel: "该目录的最近变更" };
       if (item.currentCommit && baseline !== tree) {
         // Different trees alone cannot establish upgrade direction: the local
         // checkout may be ahead, unpublished, or on a different branch.
@@ -482,13 +482,16 @@ export class ExtensionUpdateService {
     if (typeof metadata?.version !== "string" || metadata.version.length > 100) throw new Error("上游未提供有效版本号");
     const comparison = item.currentVersion ? compareVersions(item.currentVersion, metadata.version) : null;
     const result = { checkedAt, latestVersion: metadata.version, status: comparison === null ? "unknown-version" : comparison < 0 ? "available" : comparison > 0 ? "ahead" : "current", notes: "上游未提供该版本的发布说明，可打开更新入口查看。", notesLabel: "版本发布说明", updateUrl: source.type === "npm" ? "https://www.npmjs.com/package/" + source.package : "https://pypi.org/project/" + source.package + "/" };
-    const candidates = source.type === "npm" ? [typeof metadata.repository === "object" ? metadata.repository?.url : metadata.repository, metadata.homepage?.split("#")[0]] : Object.values(metadata.project_urls || {});
-    const repository = candidates.map(githubRepository).find(Boolean);
+    const repository = packageRepository(metadata, source.type) || item.upstreamRepository || "";
+    result.upstreamRepository = repository;
     if (repository) {
+      result.updateUrl = "https://github.com/" + repository + "/releases";
       for (const tag of ["v" + metadata.version, metadata.version]) {
         try {
           const release = await this.requestJson("https://api.github.com/repos/" + repository + "/releases/tags/" + encodeURIComponent(tag), memo);
-          if (typeof release.body === "string" && release.body.trim()) { result.notes = release.body.slice(0, 4000); result.updateUrl = "https://github.com/" + repository + "/releases/tag/" + encodeURIComponent(tag); break; }
+          result.updateUrl = "https://github.com/" + repository + "/releases/tag/" + encodeURIComponent(tag);
+          if (typeof release.body === "string" && release.body.trim()) result.notes = release.body.slice(0, 4000);
+          break;
         } catch { /* Package version remains useful when release notes are absent. */ }
       }
     }
