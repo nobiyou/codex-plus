@@ -1607,7 +1607,7 @@ function buildInjectionSource(css) {
     const OFFICIAL_UPGRADE_BINDING = "__codexPlusProOfficialUpgrade";
     const VERSION_CHECK_BINDING = "__codexPlusProVersionCheck";
     const MANAGED_VERSION_CLEANUP_BINDING = "__codexPlusProManagedVersionCleanup";
-    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.8-service-extensions-v5";
+    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.8-service-extensions-v6";
     const VERSION_INFO = ${JSON.stringify(hostVersionInfo)};
     const FEATURE_ATTRIBUTES = {
       theme: "data-codex-plus-theme",

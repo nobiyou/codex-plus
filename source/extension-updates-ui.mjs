@@ -1,8 +1,10 @@
 // Serialized into the renderer by injector.mjs. Keep this function self-contained.
 export function createExtensionUpdatesUI(window, document) {
-  if (window.__codexPlusProExtensionsUI?.version === 2) return window.__codexPlusProExtensionsUI;
+  if (window.__codexPlusProExtensionsUI?.version === 3) return window.__codexPlusProExtensionsUI;
   const binding = "__codexPlusProExtensionUpdates";
   const labels = { available: "有更新", current: "已是最新", ahead: "本地版本较新", "unknown-version": "本地版本未知", different: "内容不同", managed: "远程服务", "no-source": "未配置来源", unchecked: "未检查", checking: "检查中", failed: "检查失败" };
+  const categories = { mcp: "MCP", skill: "Skills", missing: "需补充" };
+  const matchesCategory = (item, key) => key === "missing" ? item.status === "no-source" : item.kind === key;
   let state = { items: [], warnings: [], autoCheck: false, state: "idle", updateCount: 0 };
   let panel = null, category = "mcp", pending = false, watchdog = null;
   const drafts = new Map();
@@ -70,7 +72,7 @@ export function createExtensionUpdatesUI(window, document) {
     const details = element("details", undefined, "codex-plus-extension-source-editor");
     details.appendChild(element("summary", "设置更新来源"));
     const savedDraft = drafts.get(item.id);
-    details.open = savedDraft?.open === true;
+    details.open = savedDraft?.open ?? (category === "missing");
     const form = element("form");
     const fields = {};
     const defaults = savedDraft || { type: item.source?.type || "github", repository: item.source?.repository || "", path: item.source?.path || "", ref: item.source?.ref || "HEAD", package: item.source?.package || "", currentVersion: item.currentKind === "provided" ? item.currentVersion : "" };
@@ -110,7 +112,8 @@ export function createExtensionUpdatesUI(window, document) {
     const card = element("article", undefined, "codex-plus-extension-item");
     card.setAttribute("data-extension-item", item.id); card.setAttribute("data-extension-status", item.status);
     const heading = element("div", undefined, "codex-plus-extension-item-heading");
-    heading.append(element("strong", item.name), element("span", labels[item.status] || "状态未知", "codex-plus-extension-state"));
+    const status = (category === "missing" ? (item.kind === "mcp" ? "MCP" : "Skill") + " · " : "") + (labels[item.status] || "状态未知");
+    heading.append(element("strong", item.name), element("span", status, "codex-plus-extension-state"));
     card.appendChild(heading);
     const currentLabel = { configured: "固定配置", "install-record": "安装记录", commit: "本地提交", content: "本地目录", provided: "已填写版本" }[item.currentKind] || "当前版本";
     card.appendChild(element("p", currentLabel + "：" + (item.currentVersion || "未知") + (item.latestVersion ? "  →  最新：" + item.latestVersion : ""), "codex-plus-extension-version"));
@@ -150,7 +153,7 @@ export function createExtensionUpdatesUI(window, document) {
     const focusedField = active?.getAttribute?.("data-extension-field"), selection = active?.selectionStart;
     panel.setAttribute("aria-busy", busy() ? "true" : "false");
     const summary = panel.querySelector("[data-extension-summary]");
-    const missing = state.items.filter(item => item.status === "no-source").length;
+    const missing = state.items.filter(item => matchesCategory(item, "missing")).length;
     const failed = state.items.filter(item => item.status === "failed").length;
     summary.textContent = busy() ? "正在检查扩展，请稍候…" : state.items.length + " 项扩展 · " + state.updateCount + " 项有更新" + (missing ? " · " + missing + " 项需补充来源" : "") + (failed ? " · " + failed + " 项检查失败" : "");
     panel.querySelector("[data-extension-time]").textContent = "最近检查：" + time(state.lastCheckedAt);
@@ -159,12 +162,13 @@ export function createExtensionUpdatesUI(window, document) {
     for (const control of panel.querySelectorAll("[data-extension-operation]")) control.disabled = busy();
     panel.querySelector("[data-extension-auto]").checked = state.autoCheck === true;
     const list = panel.querySelector("[data-extension-list]"); list.replaceChildren();
-    const items = state.items.filter(item => item.kind === category);
+    const items = state.items.filter(item => matchesCategory(item, category));
     for (const item of items) list.appendChild(row(item));
-    if (!items.length) list.appendChild(element("p", pending ? "正在扫描已安装扩展…" : "未发现这类扩展。可点击“重新扫描”刷新安装列表。", "codex-plus-extension-empty"));
+    const emptyText = category === "missing" ? "暂无需要补充来源的扩展。" : "未发现这类扩展。可点击“重新扫描”刷新安装列表。";
+    if (!items.length) list.appendChild(element("p", pending ? "正在扫描已安装扩展…" : emptyText, "codex-plus-extension-empty"));
     for (const tab of panel.querySelectorAll("[data-extension-category]")) {
       const kind = tab.getAttribute("data-extension-category");
-      tab.setAttribute("aria-pressed", kind === category ? "true" : "false"); tab.textContent = (kind === "mcp" ? "MCP" : "Skills") + " · " + state.items.filter(item => item.kind === kind).length;
+      tab.setAttribute("aria-pressed", kind === category ? "true" : "false"); tab.textContent = categories[kind] + " · " + state.items.filter(item => matchesCategory(item, kind)).length;
     }
     if (focusedField) {
       const input = [...panel.querySelectorAll("[data-extension-field]")].find(node => node.getAttribute("data-extension-field") === focusedField);
@@ -180,7 +184,7 @@ export function createExtensionUpdatesUI(window, document) {
   };
   window.addEventListener("pagehide", () => window.clearTimeout(watchdog), { once: true });
   const api = {
-    version: 2,
+    version: 3,
     refresh: () => request({ action: "list" }),
     indicators,
     createPanel() {
@@ -194,12 +198,12 @@ export function createExtensionUpdatesUI(window, document) {
       const auto = element("label", undefined, "codex-plus-extension-auto");
       const input = element("input"); input.type = "checkbox"; input.setAttribute("data-extension-auto", "true"); input.setAttribute("data-extension-operation", "preferences");
       input.addEventListener("change", () => request({ action: "preferences", autoCheck: input.checked })); auto.append(input, element("span", "每日后台检查并提醒（Plus 运行期间）"));
-      const categories = element("div", undefined, "codex-plus-extension-categories"); categories.setAttribute("role", "group"); categories.setAttribute("aria-label", "扩展类型");
-      for (const kind of ["mcp", "skill"]) { const tab = button(kind === "mcp" ? "MCP" : "Skills", () => { category = kind; render(); }); tab.setAttribute("data-extension-category", kind); categories.appendChild(tab); }
+      const filters = element("div", undefined, "codex-plus-extension-categories"); filters.setAttribute("role", "group"); filters.setAttribute("aria-label", "扩展筛选");
+      for (const [kind, title] of Object.entries(categories)) { const tab = button(title, () => { category = kind; render(); }); tab.setAttribute("data-extension-category", kind); filters.appendChild(tab); }
       const message = element("p", "", "codex-plus-extension-error"); message.setAttribute("data-extension-message", "true"); message.setAttribute("role", "alert"); message.hidden = true;
       const list = element("div", undefined, "codex-plus-extension-list"); list.setAttribute("data-extension-list", "true");
       const scope = element("p", "查看第三方 MCP 与 Skills 的上游版本和更新内容，优先关联 GitHub 项目。", "codex-plus-extension-muted");
-      panel.append(scope, summary, timestamp, actions, auto, categories, message, list); render(); return panel;
+      panel.append(scope, summary, timestamp, actions, auto, filters, message, list); render(); return panel;
     },
   };
   window.__codexPlusProExtensionsUI = api;
