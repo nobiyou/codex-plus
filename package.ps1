@@ -46,6 +46,9 @@ $required = @(
   (Join-Path $ScriptRoot "README.md"),
   (Join-Path $SourceDir "injector.mjs"),
   (Join-Path $SourceDir "startup-splash.mjs"),
+  (Join-Path $SourceDir "extension-updates.mjs"),
+  (Join-Path $SourceDir "extension-updates-ui.mjs"),
+  (Join-Path $SourceDir "extension-updates.css"),
   (Join-Path $SourceDir "theme.css"),
   (Join-Path $SourceDir "theme-packs.json"),
   (Join-Path $SourceDir "VERSION")

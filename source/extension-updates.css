@@ -1,0 +1,31 @@
+.codex-plus-extension-panel { display: grid; gap: 12px; min-width: 0; color: var(--color-token-text-primary, var(--token-text-primary, #30231e)); }
+.codex-plus-extension-panel p { margin: 0; overflow-wrap: anywhere; }
+.codex-plus-extension-summary { color: var(--color-token-text-primary, #30231e); font-weight: 600; }
+.codex-plus-extension-muted { color: var(--color-token-text-secondary, #6b615b); font-size: 12px; line-height: 1.6; }
+.codex-plus-extension-actions, .codex-plus-extension-categories { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.codex-plus-extension-categories { padding-bottom: 10px; border-bottom: 1px solid var(--color-token-border-light, #ddd); }
+.codex-plus-extension-categories button[aria-pressed="true"] { background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 16%, transparent); border-color: var(--codex-plus-accent, #b61f31); }
+.codex-plus-extension-auto { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.6; }
+.codex-plus-extension-auto input { accent-color: var(--codex-plus-accent, #b61f31); }
+.codex-plus-extension-list { display: grid; gap: 12px; }
+.codex-plus-extension-item { display: grid; min-width: 0; gap: 8px; padding: 14px; border: 1px solid var(--color-token-border-light, #ddd); border-radius: 8px; background: color-mix(in srgb, var(--color-token-main-surface-primary, #fffaf0) 92%, transparent); }
+.codex-plus-extension-item-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.codex-plus-extension-item-heading strong { overflow-wrap: anywhere; font-size: 13px; }
+.codex-plus-extension-state { padding: 2px 7px; border-radius: 4px; font-size: 11px; color: var(--color-token-text-secondary, #6b615b); background: color-mix(in srgb, var(--color-token-text-secondary, #6b615b) 9%, transparent); }
+.codex-plus-extension-item[data-extension-status="available"] .codex-plus-extension-state { color: var(--color-token-text-link-foreground, var(--codex-plus-accent-dark, #751522)); background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 14%, transparent); font-weight: 600; }
+.codex-plus-extension-version { font-size: 12px; font-variant-numeric: tabular-nums; }
+.codex-plus-extension-link { color: var(--color-token-text-link-foreground, var(--codex-plus-accent-dark, #751522)); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.codex-plus-extension-error { white-space: pre-line; color: var(--color-token-text-primary, #30231e); padding: 9px 11px; border-left: 3px solid var(--codex-plus-accent, #b61f31); background: color-mix(in srgb, var(--codex-plus-accent, #b61f31) 8%, transparent); font-size: 12px; line-height: 1.6; }
+.codex-plus-extension-panel [hidden] { display: none !important; }
+.codex-plus-extension-panel summary { cursor: pointer; color: var(--color-token-text-secondary, #6b615b); font-size: 12px; padding: 4px 0; }
+.codex-plus-extension-panel summary:focus-visible, .codex-plus-extension-panel input:focus-visible, .codex-plus-extension-panel select:focus-visible, .codex-plus-extension-panel a:focus-visible { outline: 2px solid var(--codex-plus-accent, #b61f31); outline-offset: 3px; }
+.codex-plus-extension-notes pre { margin: 8px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.65; }
+.codex-plus-extension-source-editor form { display: grid; gap: 10px; padding-top: 10px; }
+.codex-plus-extension-source-editor label { display: grid; gap: 5px; font-size: 12px; }
+.codex-plus-extension-source-editor input, .codex-plus-extension-source-editor select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 32px; border: 1px solid var(--color-token-border-light, #ddd); border-radius: 5px; padding: 6px 8px; color: var(--color-token-text-primary, #30231e); background: var(--color-token-input-background, #fffaf0); font: inherit; }
+.codex-plus-extension-badge { margin-left: auto; min-width: 16px; padding: 1px 5px; border-radius: 4px; background: var(--codex-plus-accent, #b61f31); color: #fff; font-size: 11px; text-align: center; }
+.codex-plus-extension-indicator { position: absolute; top: -3px; right: -4px; min-width: 13px; height: 15px; padding: 0 3px; border-radius: 7px; color: #fff; background: var(--codex-plus-accent, #b61f31); font: 10px/15px sans-serif; text-align: center; }
+.codex-plus-pro-settings-button:has(.codex-plus-extension-indicator) { position: relative; }
+.codex-plus-extension-indicator[hidden], .codex-plus-extension-badge[hidden] { display: none !important; }
+.codex-plus-extension-empty { padding: 20px 8px; color: var(--color-token-text-secondary, #6b615b); font-size: 12px; line-height: 1.7; }
+:root[data-codex-pokedex-theme="on"].electron-dark .codex-plus-extension-panel .codex-plus-pro-settings-upgrade:not(:disabled) { color: var(--color-token-text-link-foreground, #f4ebe3) !important; }

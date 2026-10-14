@@ -4,6 +4,8 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildStartupSource } from "./startup-splash.mjs";
+import { ExtensionUpdateService } from "./extension-updates.mjs";
+import { createExtensionUpdatesUI } from "./extension-updates-ui.mjs";
 
 // =============================================================================
 // Codex Plus Pro — Windows Scope B2 (Theme + Model picker + Pet; PiP retired)
@@ -21,6 +23,7 @@ const mainPort = options["main-port"] ? String(options["main-port"]) : "";
 const featureSettingsBinding = "__codexPlusProSettingsChanged";
 const officialUpgradeBinding = "__codexPlusProOfficialUpgrade";
 const versionCheckBinding = "__codexPlusProVersionCheck";
+const extensionUpdatesBinding = "__codexPlusProExtensionUpdates";
 const managedVersionCleanupBinding = "__codexPlusProManagedVersionCleanup";
 const mainControllerSource = buildMainControllerSource();
 let hostFeatureSettings = {
@@ -71,7 +74,11 @@ const oneShot = options.once === true;
 const TINY_JPEG = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wAAAAgJCgsKCA0LCwsNDg0PEhQRDxISEhYVFxkWGSYeIyAhICUhJSwtKjApKy84MiM6OEk5QE5NTk9GXl5hXFtcRcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcP/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGcP//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//Z";
 const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
-const cssTemplate = await fs.readFile(cssPath, "utf8");
+const [baseCssTemplate, extensionUpdatesCss] = await Promise.all([
+  fs.readFile(cssPath, "utf8"),
+  fs.readFile(path.join(scriptDirectory, "extension-updates.css"), "utf8"),
+]);
+const cssTemplate = baseCssTemplate + "\n" + extensionUpdatesCss;
 const [artworkDataUri, logoDataUri, petNotificationsSource] = await Promise.all([
   loadCompressedDataUri(artworkPath, "wallpaper"),
   loadCompressedDataUri(logoPath, "logo"),
@@ -118,6 +125,10 @@ const attachedTargetIds = new Set();
 const attachingTargetIds = new Set();
 const pageSessions = new Map();
 const pageTargetsBySessionId = new Map();
+const extensionUpdates = new ExtensionUpdateService({
+  onState: (payload) => { broadcastExtensionUpdateResult(payload).catch(() => log("Extension update notification could not reach the main window")); },
+});
+let nextExtensionUpdateTick = Date.now() + 30000;
 let browserConnection = null;
 let mainConnection = null;
 let rendererPetState = null;
@@ -156,6 +167,15 @@ while (!shuttingDown) {
       if (!liveIds.has(targetId)) {
         invalidatePageSession(targetId, null, "Target.removed");
       }
+    }
+
+    if (!oneShot && Date.now() >= nextExtensionUpdateTick && [...pageSessions.values()].some(page => isFeatureSettingsOwnerTarget(page.target))) {
+      nextExtensionUpdateTick = Date.now() + 60000;
+      extensionUpdates.maybeCheck().catch((error) => {
+        nextExtensionUpdateTick = Date.now() + 86400000;
+        log("Extension background check could not run: " + error.message);
+        broadcastExtensionUpdateResult(extensionUpdates.snapshot("failed", error.message)).catch(() => {});
+      });
     }
 
     if (mainPort && !mainConnection && !mainAttaching) {
@@ -281,6 +301,21 @@ async function postVersionCheckResult(send, payload) {
   } catch (error) {
     log(`Codex Plus Pro version check UI update failed: ${error.message}`);
   }
+}
+
+async function postExtensionUpdateResult(send, payload) {
+  await send("Runtime.evaluate", {
+    expression: "window.__codexPlusProExtensionUpdateResult?.(" + JSON.stringify(payload) + ")",
+    awaitPromise: false,
+    returnByValue: false,
+  });
+}
+
+async function broadcastExtensionUpdateResult(payload) {
+  const results = await Promise.allSettled([...pageSessions.values()]
+    .filter(page => isFeatureSettingsOwnerTarget(page.target))
+    .map(page => postExtensionUpdateResult(page.send, payload)));
+  if (results.some(result => result.status === "rejected")) log("An extension update notification could not reach a renderer");
 }
 
 async function postManagedVersionCleanupResult(send, payload) {
@@ -689,6 +724,21 @@ async function attachToPageTarget(browser, target, autoAttachedSessionId = null)
       } catch (error) {
         log(`Codex Plus Pro settings update failed: ${error.message}`);
       }
+    } else if (params?.name === extensionUpdatesBinding) {
+      if (!isFeatureSettingsOwnerTarget(target)) return;
+      try {
+        let payload;
+        try {
+          if (typeof params.payload !== "string" || params.payload.length > 8192) throw new Error();
+          payload = JSON.parse(params.payload);
+          if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new Error();
+        } catch { throw new Error("扩展更新请求格式无效"); }
+        const result = await extensionUpdates.handle(payload);
+        await postExtensionUpdateResult(send, result);
+      } catch (error) {
+        await postExtensionUpdateResult(send, extensionUpdates.snapshot("failed", error.message))
+          .catch(() => log("Extension check result could not reach a closed renderer"));
+      }
     } else if (params?.name === managedVersionCleanupBinding) {
       try {
         const payload = JSON.parse(params.payload || "{}");
@@ -758,6 +808,7 @@ async function attachToPageTarget(browser, target, autoAttachedSessionId = null)
   await send("Runtime.addBinding", { name: featureSettingsBinding });
   await send("Runtime.addBinding", { name: officialUpgradeBinding });
   await send("Runtime.addBinding", { name: versionCheckBinding });
+  await send("Runtime.addBinding", { name: extensionUpdatesBinding });
   await send("Runtime.addBinding", { name: managedVersionCleanupBinding });
 
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1556,7 +1607,7 @@ function buildInjectionSource(css) {
     const OFFICIAL_UPGRADE_BINDING = "__codexPlusProOfficialUpgrade";
     const VERSION_CHECK_BINDING = "__codexPlusProVersionCheck";
     const MANAGED_VERSION_CLEANUP_BINDING = "__codexPlusProManagedVersionCleanup";
-    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.8-service-extensions-v3";
+    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.8-service-extensions-v4";
     const VERSION_INFO = ${JSON.stringify(hostVersionInfo)};
     const FEATURE_ATTRIBUTES = {
       theme: "data-codex-plus-theme",
@@ -2439,11 +2490,13 @@ function buildInjectionSource(css) {
     window.__codexPokedexFlatPickerState = flatPickerState;
 
     // Theme + model picker + pet (Scope B2; PiP retired).
+    const extensionUpdatesUI = (${createExtensionUpdatesUI.toString()})(window, document);
     const SETTINGS_SECTIONS = [
       { key: "theme", label: "主题", feature: "theme" },
       { key: "modelPicker", label: "模型栏", feature: "modelPicker" },
       { key: "pet", label: "宠物", feature: "pet" },
       { key: "compatibility", label: "界面兼容性", feature: "compatibility" },
+      { key: "extensions", label: "扩展更新", feature: "extensions" },
       { key: "version", label: "版本", feature: "version" },
     ];
     const BOOLEAN_SETTINGS = new Set(["theme", "pet", "modelPicker"]);
@@ -3156,9 +3209,11 @@ function buildInjectionSource(css) {
         panel.hidden = panel.getAttribute("data-settings-section") !== sectionKey;
       }
       if (sectionKey === "compatibility") refreshCompatibilityPanel();
+      if (sectionKey === "extensions") extensionUpdatesUI.refresh();
     };
 
     const updateSettingsPanel = () => {
+      extensionUpdatesUI.indicators();
       const button = document.querySelector(".codex-plus-pro-settings-button");
       const popover = document.querySelector(".codex-plus-pro-settings-popover");
       for (const choice of popover?.querySelectorAll("[data-codex-plus-setting]") || []) {
@@ -3441,6 +3496,8 @@ function buildInjectionSource(css) {
           panel.appendChild(createSettingsRow("壁纸强度", rangeControl));
         } else if (item.key === "compatibility") {
           panel.appendChild(createCompatibilityPanel());
+        } else if (item.key === "extensions") {
+          panel.appendChild(extensionUpdatesUI.createPanel());
         } else if (item.key === "version") {
           const sourceLabel = VERSION_INFO.appSource === "Appx"
             ? "Microsoft Store Appx"

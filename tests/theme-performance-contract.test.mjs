@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { createExtensionUpdatesUI } from "../source/extension-updates-ui.mjs";
 
 const injectorSourcePath = new URL("../source/injector.mjs", import.meta.url);
 const themeStylesPath = new URL("../source/theme.css", import.meta.url);
@@ -15,6 +16,7 @@ test("renderer injection waits for a document node before initializing decoratio
   const injection = vm.runInNewContext(`${factorySource}\nbuildInjectionSource("")`, {
     hostVersionInfo: {},
     WINDOWS_SCOPE_A_VERSION: "test",
+    createExtensionUpdatesUI,
   });
   const listeners = [];
   const observedNodes = [];
