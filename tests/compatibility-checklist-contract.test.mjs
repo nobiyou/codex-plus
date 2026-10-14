@@ -75,13 +75,11 @@ test("compatibility repairs use declared scoped fallback attributes", async () =
 });
 
 test("compatibility settings UI exposes categorized detection and repair controls", async () => {
-  const [source, styles, version] = await Promise.all([
+  const [source, styles] = await Promise.all([
     fs.readFile(injectorSourcePath, "utf8"),
     fs.readFile(new URL("../source/theme.css", import.meta.url), "utf8"),
-    fs.readFile(new URL("../source/VERSION", import.meta.url), "utf8"),
   ]);
 
-  assert.ok(source.includes(`const SETTINGS_UI_VERSION = "win-settings-scope-b2-${version.trim()}-service-extensions-v7";`), "settings UI must use the published release version");
   assert.match(source, /key: "compatibility", label: "界面兼容性", feature: "compatibility"/);
   for (const label of ["全部", "全局", "对话界面", "编程界面", "设置界面"]) {
     assert.match(source, new RegExp(label));

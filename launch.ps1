@@ -340,7 +340,6 @@ Add-InjectorArg -Arguments $injectorArgsList -Name "--main-port" -Value ("{0}" -
 Add-InjectorArg -Arguments $injectorArgsList -Name "--css" -Value $CssPath
 Add-InjectorArg -Arguments $injectorArgsList -Name "--wallpaper" -Value $WallpaperPath
 Add-InjectorArg -Arguments $injectorArgsList -Name "--logo" -Value $LogoPath
-Add-InjectorArg -Arguments $injectorArgsList -Name "--plus-version" -Value $version
 Add-InjectorArg -Arguments $injectorArgsList -Name "--app-source" -Value $codex.Source
 Add-InjectorArg -Arguments $injectorArgsList -Name "--app-version" -Value $codex.Version
 Add-InjectorArg -Arguments $injectorArgsList -Name "--app-kind" -Value $codex.AppKind

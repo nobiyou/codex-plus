@@ -37,10 +37,9 @@ let hostFeatureSettings = {
   petMotion: "full",
   modelDensity: "compact",
 };
-const WINDOWS_SCOPE_A_VERSION = "1.8.9";
+const WINDOWS_SCOPE_A_VERSION = (await fs.readFile(path.join(scriptDirectory, "VERSION"), "utf8")).trim();
 const scriptVersion = WINDOWS_SCOPE_A_VERSION + " (Scope B2 pet - Windows)";
 const hostVersionInfo = normalizeVersionInfo({
-  plusVersion: options["plus-version"] ?? WINDOWS_SCOPE_A_VERSION,
   appSource: options["app-source"] ?? "unknown",
   appVersion: options["app-version"] ?? "unknown",
   appKind: options["app-kind"] ?? "unknown",
@@ -1093,7 +1092,7 @@ function normalizeVersionInfo(value) {
     return text || fallback;
   };
   return {
-    plusVersion: clean(value.plusVersion, WINDOWS_SCOPE_A_VERSION),
+    plusVersion: WINDOWS_SCOPE_A_VERSION,
     appSource: clean(value.appSource),
     appVersion: clean(value.appVersion),
     appKind: clean(value.appKind),
@@ -1619,8 +1618,8 @@ function buildInjectionSource(css) {
     const OFFICIAL_UPGRADE_BINDING = "__codexPlusProOfficialUpgrade";
     const VERSION_CHECK_BINDING = "__codexPlusProVersionCheck";
     const MANAGED_VERSION_CLEANUP_BINDING = "__codexPlusProManagedVersionCleanup";
-    const SETTINGS_UI_VERSION = "win-settings-scope-b2-1.8.9-service-extensions-v7";
     const VERSION_INFO = ${JSON.stringify(hostVersionInfo)};
+    const SETTINGS_UI_VERSION = "win-settings-scope-b2-" + VERSION_INFO.plusVersion + "-service-extensions-v8";
     const FEATURE_ATTRIBUTES = {
       theme: "data-codex-plus-theme",
       pet: "data-codex-plus-pet",
@@ -3320,7 +3319,7 @@ function buildInjectionSource(css) {
       title.textContent = "Codex Plus Pro";
       const subtitle = document.createElement("div");
       subtitle.className = "codex-plus-pro-settings-subtitle";
-      subtitle.textContent = "Windows 1.8.9 · MCP / Skills 更新、主题启动动画与官方宠物";
+      subtitle.textContent = "Windows " + VERSION_INFO.plusVersion + " · MCP / Skills 更新、主题启动动画与官方宠物";
       heading.append(title, subtitle);
       const closeButton = document.createElement("button");
       closeButton.type = "button";
