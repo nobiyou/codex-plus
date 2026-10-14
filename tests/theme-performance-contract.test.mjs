@@ -9,11 +9,12 @@ const themeStylesPath = new URL("../source/theme.css", import.meta.url);
 
 test("renderer injection waits for a document node before initializing decorations", async () => {
   const source = await fs.readFile(injectorSourcePath, "utf8");
+  const documentPolicy = source.slice(source.indexOf("function isCodexAppDocument("), source.indexOf("function isInjectableTarget("));
   const factorySource = source.slice(
     source.indexOf("function buildInjectionSource(css)"),
     source.indexOf("function buildBootstrapSource()"),
   );
-  const injection = vm.runInNewContext(`${factorySource}\nbuildInjectionSource("")`, {
+  const injection = vm.runInNewContext(`${documentPolicy}\n${factorySource}\nbuildInjectionSource("")`, {
     hostVersionInfo: {},
     WINDOWS_SCOPE_A_VERSION: "test",
     createExtensionUpdatesUI,

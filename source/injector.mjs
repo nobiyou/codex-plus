@@ -213,18 +213,21 @@ try { browserConnection?.close(); } catch {}
 try { mainConnection?.close(); } catch {}
 process.exit(0);
 
+function isCodexAppDocument(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === "app:" && url.hostname === "-"
+      && ["/index.html", "/detached-window.html"].includes(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function isInjectableTarget(target) {
   if (!target?.targetId) return false;
   const type = String(target.type || "");
   if (type !== "page" && type !== "webview") return false;
-  const url = String(target.url || "");
-  const title = String(target.title || "");
-  if (url.startsWith("devtools://") || url.startsWith("chrome-extension://") || url.startsWith("chrome://")) return false;
-  if (url.startsWith("app://")) return true;
-  if (title === "Codex" || title === "ChatGPT") return true;
-  if (url.includes("chatgpt.com") || url.includes("openai.com")) return true;
-  if (url && url !== "about:blank") return true;
-  return title.length > 0;
+  return isCodexAppDocument(String(target.url || ""));
 }
 
 function isFeatureSettingsOwnerTarget(target) {
@@ -673,7 +676,7 @@ async function attachToPageTarget(browser, target, autoAttachedSessionId = null)
 
   const pageSource = buildInjectionSource("/* css applied via host chunks */")
     + "\n;\n"
-    + petNotificationsSource;
+    + `if ((${isCodexAppDocument.toString()})(location.href)) {\n${petNotificationsSource}\n}`;
   // Install first, before requesting runtime events or waiting for DOM readiness.
   // runImmediately also covers a navigation that began before the attachment.
   await send("Page.addScriptToEvaluateOnNewDocument", {
@@ -1378,6 +1381,7 @@ function buildThemeAssetSource(wallpaperDataUri, logoDataUri, accentAssetPacks =
   // Also expose default asset URIs + accent packs so the page can restore them on "reset"
   // and so first paint uses the saved accent pack (not always pokedex defaults).
   return `(() => {
+    if (!(${isCodexAppDocument.toString()})(location.href)) return { ok: true, excluded: true };
     const root = document.documentElement;
     if (!root) return { ok: false };
     window.__codexPlusProDefaultWallpaper = ${JSON.stringify(wallpaperDataUri)};
@@ -1445,6 +1449,7 @@ function buildThemeAssetSource(wallpaperDataUri, logoDataUri, accentAssetPacks =
 async function applyThemeAssets(send, wallpaperDataUri, logoDataUri, accentAssetPacks = null) {
   const wallpaperExpression = buildThemeAssetSource(wallpaperDataUri, logoDataUri, accentAssetPacks);
   const logoExpression = `(() => {
+    if (!(${isCodexAppDocument.toString()})(location.href)) return { ok: true, excluded: true };
     // Logo already applied with wallpaper step when packs are available.
     // Only fill a missing default logo; never overwrite a custom or pack logo.
     const root = document.documentElement;
@@ -1481,7 +1486,7 @@ async function applyThemeAssets(send, wallpaperDataUri, logoDataUri, accentAsset
   if (logoResult.exceptionDetails) {
     throw new Error(logoResult.exceptionDetails.exception?.description ?? "Logo apply failed");
   }
-  log("Wallpaper and logo assets applied");
+  if (!wallpaperResult.result?.value?.excluded && !logoResult.result?.value?.excluded) log("Wallpaper and logo assets applied");
 }
 
 async function applyCssInChunks(send, cssText) {
@@ -1494,6 +1499,7 @@ async function applyCssInChunks(send, cssText) {
   try {
     const evalResult = await send("Runtime.evaluate", {
       expression: `(() => {
+        if (!(${isCodexAppDocument.toString()})(location.href)) return { ok: true, excluded: true };
         const STYLE_ID = "codex-pokedex-theme-style";
         const cssText = ${JSON.stringify(cssText)};
         let style = document.getElementById(STYLE_ID);
@@ -1515,6 +1521,7 @@ async function applyCssInChunks(send, cssText) {
     }
     const result = evalResult.result?.value;
     if (!result?.ok) throw new Error("Atomic CSS length verification failed");
+    if (result.excluded) return;
     log(
       result.skipped
         ? `CSS already applied (${cssText.length} chars)`
@@ -1526,8 +1533,9 @@ async function applyCssInChunks(send, cssText) {
   }
 
   log(`Atomic CSS apply failed (${atomicFailure.message}); falling back to chunks`);
-  await send("Runtime.evaluate", {
+  const prepared = await send("Runtime.evaluate", {
     expression: `(() => {
+      if (!(${isCodexAppDocument.toString()})(location.href)) return { excluded: true };
       const STYLE_ID = "codex-pokedex-theme-style";
       let style = document.getElementById(STYLE_ID);
       if (!style) {
@@ -1540,11 +1548,13 @@ async function applyCssInChunks(send, cssText) {
     })()`,
     returnByValue: true,
   });
+  if (prepared.result?.value?.excluded) return;
 
   for (let offset = 0; offset < cssText.length; offset += CSS_CHUNK_SIZE) {
     const chunk = cssText.slice(offset, offset + CSS_CHUNK_SIZE);
     const evalResult = await send("Runtime.evaluate", {
       expression: `(() => {
+        if (!(${isCodexAppDocument.toString()})(location.href)) return { excluded: true };
         const style = document.getElementById("codex-pokedex-theme-style");
         if (!style) return false;
         style.textContent += ${JSON.stringify(chunk)};
@@ -1555,6 +1565,7 @@ async function applyCssInChunks(send, cssText) {
     if (evalResult.exceptionDetails) {
       throw new Error(evalResult.exceptionDetails.exception?.description ?? "CSS chunk failed");
     }
+    if (evalResult.result?.value?.excluded) return;
   }
   log(`CSS applied in chunks (${cssText.length} chars, ${Date.now() - startedAt}ms)`);
 }
@@ -1571,6 +1582,7 @@ async function applyCssInChunks(send, cssText) {
 // -----------------------------------------------------------------------------
 function buildInjectionSource(css) {
   return `(function initializeRendererDecorations() {
+    if (!(${isCodexAppDocument.toString()})(location.href)) return { active: false, excluded: true };
     if (!document.documentElement) {
       document.addEventListener("DOMContentLoaded", initializeRendererDecorations, { once: true });
       return;

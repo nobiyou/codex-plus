@@ -9,8 +9,9 @@ import { buildStartupSource } from "../source/startup-splash.mjs";
 
 const css = await fs.readFile(new URL("../source/theme.css", import.meta.url), "utf8");
 const injector = await fs.readFile(new URL("../source/injector.mjs", import.meta.url), "utf8");
+const documentPolicy = injector.slice(injector.indexOf("function isCodexAppDocument("), injector.indexOf("function isInjectableTarget("));
 const assetFactory = injector.slice(injector.indexOf("function buildThemeAssetSource("), injector.indexOf("async function applyThemeAssets("));
-const assetSource = vm.runInNewContext(`${assetFactory}\nbuildThemeAssetSource("data:image/png;base64,default-wall", "data:image/png;base64,default-logo", { aria: {wallpaper: "data:image/png;base64,blue-wall", logo: "data:image/png;base64,blue-logo"}})`, { TINY_JPEG: "tiny-jpeg", TINY_PNG: "tiny-png" });
+const assetSource = vm.runInNewContext(`${documentPolicy}\n${assetFactory}\nbuildThemeAssetSource("data:image/png;base64,default-wall", "data:image/png;base64,default-logo", { aria: {wallpaper: "data:image/png;base64,blue-wall", logo: "data:image/png;base64,blue-logo"}})`, { TINY_JPEG: "tiny-jpeg", TINY_PNG: "tiny-png" });
 
 function fixture({ route = "", theme = true, parsing = false, loader = true, react = false, accent = "aria", custom = false, reduced = false } = {}) {
   const styles = [];
@@ -192,7 +193,7 @@ test("a new renderer installs startup immediately before subscribing to runtime 
       if (failing && method === "Page.addScriptToEvaluateOnNewDocument") throw new Error("registration failed");
       return {};
     } };
-    const attach = vm.runInNewContext(`${bootstrap}\nattachToPageTarget`, {
+    const attach = vm.runInNewContext(`${documentPolicy}\n${bootstrap}\nattachToPageTarget`, {
       pageSessions: new Map(), pageTargetsBySessionId: new Map(), buildInjectionSource: () => "pageRuntime()", petNotificationsSource: "petRuntime()", startupSource: "nativeStartup()", invalidatePageSession() {},
     });
     const pending = attach(browser, { targetId: "first-page" }, "paused-session");
