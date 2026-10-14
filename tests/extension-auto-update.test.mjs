@@ -156,7 +156,7 @@ test("a shared Git repository is updated once and dirty files outside the Skill 
   assert.equal((await run(["rev-parse", "HEAD"])).stdout.trim(), before);
 });
 
-async function cachedMcp(t, { dirty = false, duringInstall = () => {} } = {}) {
+async function cachedMcp(t, { dirty = false, fileCount = 0, duringInstall = () => {} } = {}) {
   let latest = "2.0.0", installs = 0;
   const manifest = version => JSON.stringify({ name: "example-mcp", version, repository: "https://github.com/example/mcp" });
   const f = await fixture(t, { npmCli: "fixture-npm-cli.js", fetcher: async url => url.includes("registry.npmjs.org") ? json({ version: latest, repository: "https://github.com/example/mcp" }) : json({ body: "New release" }), updateExecutor: async (command, args) => {
@@ -169,11 +169,20 @@ async function cachedMcp(t, { dirty = false, duringInstall = () => {} } = {}) {
     await fs.mkdir(path.join(root, "scripts"), { recursive: true });
     await fs.writeFile(path.join(root, "package.json"), manifest(version));
     await fs.writeFile(path.join(root, "scripts/start.mjs"), "// " + version + "\n");
+    if (fileCount) {
+      await fs.mkdir(path.join(root, "dist"), { recursive: true });
+      await Promise.all(Array.from({ length: fileCount }, (_, i) => fs.writeFile(path.join(root, "dist", i + ".js"), "// packaged file " + i + "\n")));
+    }
     installs++; await duringInstall(f, version);
     return { stdout: "", stderr: "" };
   } });
   const entry = await f.write("cache/_npx/fixture/node_modules/example-mcp/scripts/start.mjs", "// 1.0.0\n" + (dirty ? "// My edits\n" : ""));
   await f.write("cache/_npx/fixture/node_modules/example-mcp/package.json", manifest("1.0.0"));
+  if (fileCount) {
+    const directory = path.join(path.dirname(path.dirname(entry)), "dist");
+    await fs.mkdir(directory, { recursive: true });
+    await Promise.all(Array.from({ length: fileCount }, (_, i) => fs.writeFile(path.join(directory, i + ".js"), "// packaged file " + i + "\n")));
+  }
   const config = await f.write(".codex/config.toml", '[mcp_servers.example]\ncommand="node"\nargs=[' + JSON.stringify(entry) + ', "--token", "secret-value"]\n');
   return { ...f, entry, config, installs: () => installs, next: value => { latest = value; } };
 }
@@ -199,11 +208,61 @@ test("npm-cache updates install separately, retain the old cache, remain updatea
   assert.equal((await restarted.handle({ action: "list" })).items[0].updateSupported, true);
 });
 
+test("npm packages larger than the Skill comparison budget still update and roll back", async t => {
+  const f = await cachedMcp(t, { fileCount: 1057 });
+  await f.service.handle({ action: "preferences", autoUpdate: true });
+  const updated = await f.service.handle({ action: "check" });
+  assert.equal(updated.items[0].updateState, "pending-restart", updated.items[0].updateError);
+  assert.equal(updated.items[0].currentVersion, "2.0.0");
+  await f.service.handle({ action: "rollback", itemId: updated.items[0].id });
+  assert.equal(readMcpConfig(await fs.readFile(f.config, "utf8")).servers[0].launch.args[0], f.entry);
+  assert.equal(await fs.readFile(f.entry, "utf8"), "// 1.0.0\n");
+});
+
+test("Skill directories still obey their smaller comparison budget", async t => {
+  const f = await fixture(t, { fetcher: async url => skillFetch(url) });
+  const file = await addSkill(f);
+  await Promise.all(Array.from({ length: 512 }, (_, i) => f.write(".agents/skills/example/" + i + ".txt", "Local file\n")));
+  await f.service.handle({ action: "preferences", autoUpdate: true });
+  const skipped = await f.service.handle({ action: "check" });
+  assert.equal(skipped.items[0].updateState, "skipped");
+  assert.match(skipped.items[0].updateError, /Skill.*512/);
+  assert.equal(await fs.readFile(file, "utf8"), oldText);
+  assert.equal((await fs.readdir(path.dirname(file))).length, 513);
+});
+
+test("npm install failures identify the stage and code without leaking stderr credentials", async t => {
+  for (const { version, code, killed, expected } of [
+    { version: "1.0.0", code: "EACCES", expected: /原版本.*EACCES/ },
+    { version: "2.0.0", code: "E404", expected: /新版.*E404/ },
+    { version: "2.0.0", killed: true, expected: /新版.*TIMEOUT/ },
+  ]) {
+    const f = await cachedMcp(t);
+    const install = f.service.updater.executor;
+    f.service.updater.executor = async (command, args, options) => {
+      if (!args.at(-1).endsWith("@" + version)) return install(command, args, options);
+      const error = new Error("npm failed with private arguments");
+      error.stderr = (code ? "npm error code " + code + "\n" : "") + "npm error url https://token-secret@example.invalid\n";
+      error.killed = killed;
+      throw error;
+    };
+    await f.service.handle({ action: "preferences", autoUpdate: true });
+    const failed = await f.service.handle({ action: "check" });
+    assert.match(failed.items[0].updateError, expected);
+    assert.equal(JSON.stringify(failed).includes("token-secret"), false);
+    assert.equal(JSON.stringify(failed).includes("private arguments"), false);
+    assert.equal(readMcpConfig(await fs.readFile(f.config, "utf8")).servers[0].launch.args[0], f.entry);
+    const packages = await fs.readdir(path.join(f.home, "plus/mcp-packages")).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+    assert.deepEqual(packages, []);
+  }
+});
+
 test("modified npm packages and config changes during installation are preserved", async t => {
-  const dirty = await cachedMcp(t, { dirty: true });
+  const dirty = await cachedMcp(t, { dirty: true, fileCount: 1057 });
   await dirty.service.handle({ action: "preferences", autoUpdate: true });
   const skipped = await dirty.service.handle({ action: "check" });
   assert.equal(skipped.items[0].updateState, "skipped");
+  assert.match(skipped.items[0].updateError, /本地修改/);
   assert.equal(readMcpConfig(await fs.readFile(dirty.config, "utf8")).servers[0].launch.args[0], dirty.entry);
   const changed = await cachedMcp(t, { duringInstall: async (f, version) => { if (version === "2.0.0") await fs.appendFile(path.join(f.home, ".codex/config.toml"), "\n# Changed while downloading\n"); } });
   await changed.service.handle({ action: "preferences", autoUpdate: true });

@@ -633,7 +633,7 @@ export class ExtensionUpdateService {
           catch { this.saved.history[this.saved.history.findIndex(entry => entry.id === journal.id)] = journal; }
           if (["updated", "pending-restart"].includes(journal.state)) for (const member of group) changed.set(member.id, { operation: journal, result: this.saved.cache[member.id]?.result });
         } else {
-          const failure = { id: randomUUID(), itemIds, name: item.name, method: updateSupport(item).method || "unsupported", startedAt: new Date(this.now()).toISOString(), state: error instanceof UpdateSkipped ? "skipped" : "failed", error: error instanceof UpdateSkipped ? error.message : "更新失败：" + (error.message.startsWith("E") ? "请检查文件权限与安装位置" : error.message) };
+          const failure = { id: randomUUID(), itemIds, name: item.name, method: updateSupport(item).method || "unsupported", startedAt: new Date(this.now()).toISOString(), state: error instanceof UpdateSkipped ? "skipped" : "failed", error: error instanceof UpdateSkipped ? error.message : (error.message.startsWith("E") ? "请检查文件权限与安装位置" : error.message) };
           await this.recordOperation(failure);
         }
       }

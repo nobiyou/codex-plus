@@ -10,21 +10,23 @@ const digest = value => createHash("sha256").update(JSON.stringify(value)).diges
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export class UpdateSkipped extends Error {}
 
-export async function folderBlobs(directory, complete = false) {
+export async function folderBlobs(directory, { kind = "skill", complete = false } = {}) {
+  const limits = kind === "mcp" ? { entries: 16384, bytes: 128 * 1024 * 1024, label: "MCP 包" } : { entries: 512, bytes: 32 * 1024 * 1024, label: "Skill" };
   const blobs = {}; let size = 0, count = 0;
   const visit = async (root, prefix) => {
     for (const file of await fs.readdir(root, { withFileTypes: true })) {
-      if ((complete === "package" && file.name === "node_modules") || (!complete && [".git", "node_modules", "__pycache__", ".venv"].includes(file.name))) continue;
-      if (++count > 512 || file.isSymbolicLink()) throw new Error("本地 Skill 目录过大或包含链接，无法比较完整内容");
+      if ((kind === "mcp" && file.name === "node_modules") || (!complete && [".git", "node_modules", "__pycache__", ".venv"].includes(file.name))) continue;
+      if (++count > limits.entries) throw new UpdateSkipped("本地 " + limits.label + " 超过 " + limits.entries + " 项比较上限，已跳过更新");
+      if (file.isSymbolicLink()) throw new UpdateSkipped("本地 " + limits.label + " 包含链接，无法比较完整内容");
       const relative = prefix + file.name;
       if (file.isDirectory()) await visit(path.join(root, file.name), relative + "/");
       else if (file.isFile()) {
         size += (await fs.stat(path.join(root, file.name))).size;
-        if (size > 32 * 1024 * 1024) throw new Error("本地 Skill 内容过大，无法完整比较");
+        if (size > limits.bytes) throw new UpdateSkipped("本地 " + limits.label + " 超过 " + limits.bytes / 1024 / 1024 + " MB 比较上限，已跳过更新");
         const content = await fs.readFile(path.join(root, file.name));
         blobs[relative] = createHash("sha1").update(Buffer.from("blob " + content.length + "\0")).update(content).digest("hex");
       }
-      else throw new Error("本地 Skill 含不支持的文件类型");
+      else throw new UpdateSkipped("本地 " + limits.label + " 含不支持的文件类型，已跳过更新");
     }
   };
   await visit(directory, "");
@@ -133,7 +135,7 @@ export class ExtensionUpdater {
     const before = treeFiles(await this.requestJson(base + "/git/trees/" + baseline + "?recursive=1", memo));
     const target = await fs.realpath(item.location);
     if (path.resolve(item.location) !== target) throw new UpdateSkipped("链接安装的 Skill 请按原方式更新");
-    if (!same(await folderBlobs(target, true), before)) throw new UpdateSkipped("Skill 有本地修改，已跳过更新");
+    if (!same(await folderBlobs(target, { complete: true }), before)) throw new UpdateSkipped("Skill 有本地修改，已跳过更新");
     const commit = await this.requestJson(base + "/commits/" + encodeURIComponent(item.source.ref), memo);
     if (!sha(commit.sha)) throw new Error("上游没有提供有效提交");
     const tree = await this.requestJson(base + "/git/trees/" + commit.sha + "?recursive=1", memo);
@@ -157,10 +159,10 @@ export class ExtensionUpdater {
         const file = path.join(stage, ...name.split("/")); await fs.mkdir(path.dirname(file), { recursive: true }); await fs.writeFile(file, content);
         if (tree.tree.find(entry => entry.path === prefix + name)?.mode === "100755") await fs.chmod(file, 0o755);
       }
-      if (await fs.realpath(item.location) !== target || !same(await folderBlobs(target, true), before)) throw new UpdateSkipped("下载期间本地 Skill 已变化，已跳过更新");
+      if (await fs.realpath(item.location) !== target || !same(await folderBlobs(target, { complete: true }), before)) throw new UpdateSkipped("下载期间本地 Skill 已变化，已跳过更新");
       Object.assign(operation, { target, backup, stage, beforeHash: digest(before), afterHash: digest(after), beforeTree: baseline, afterTree: targetTree, source: item.source });
       await record(operation);
-      if (await fs.realpath(item.location) !== target || !same(await folderBlobs(target, true), before)) throw new UpdateSkipped("写入前本地 Skill 已变化，已跳过更新");
+      if (await fs.realpath(item.location) !== target || !same(await folderBlobs(target, { complete: true }), before)) throw new UpdateSkipped("写入前本地 Skill 已变化，已跳过更新");
       await fs.rename(target, backup);
       try { await fs.rename(stage, target); } catch (error) { await fs.rename(backup, target); throw error; }
       operation.state = "updated"; operation.finishedAt = new Date().toISOString(); await record(operation); return operation;
@@ -188,34 +190,41 @@ export class ExtensionUpdater {
     if (!parsed || !same(parsed.launch, item.launch)) throw new UpdateSkipped("MCP 启动配置已变化，已跳过更新");
     if (installation.type === "npm-cache") {
       const directory = path.join(this.dataDirectory, "mcp-packages", operation.id);
+      let phase = "定位 npm 安装器";
       try {
         const npm = await this.locateNpm();
         if (!/^\d+(?:\.\d+)*(?:[-+][\w.-]+)?$/.test(item.currentVersion || "")) throw new UpdateSkipped("无法确认原 MCP 包版本，已跳过更新");
+        phase = "核对原 MCP 包";
         const originalRoot = await fs.realpath(installation.root);
-        const original = await folderBlobs(originalRoot, "package");
+        const original = await folderBlobs(originalRoot, { kind: "mcp", complete: true });
         const install = async (prefix, version) => {
           this.onProgress();
           await this.executor(process.execPath, [npm, "install", "--prefix", prefix, "--ignore-scripts", "--no-audit", "--no-fund", "--registry=https://registry.npmjs.org", item.source.package + "@" + version], { windowsHide: true, timeout: 180000, maxBuffer: 256 * 1024 });
         };
         // npm is run through Node, without a shell or package lifecycle scripts.
         const baseline = path.join(directory, "baseline");
+        phase = "安装原版本基线";
         await install(baseline, item.currentVersion);
         const baselineRoot = path.join(baseline, "node_modules", ...item.source.package.split("/"));
-        if (!same(original, await folderBlobs(baselineRoot, "package"))) throw new UpdateSkipped("MCP 包有本地修改或原版本无法完整核对，已跳过更新");
+        phase = "核对原版本基线";
+        if (!same(original, await folderBlobs(baselineRoot, { kind: "mcp", complete: true }))) throw new UpdateSkipped("MCP 包有本地修改或原版本无法完整核对，已跳过更新");
         await fs.rm(baseline, { recursive: true, force: true });
+        phase = "下载并安装新版 MCP";
         await install(directory, item.latestVersion);
         const root = path.join(directory, "node_modules", ...item.source.package.split("/"));
+        phase = "校验新版 MCP";
         const manifest = JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"));
         if (manifest.name !== item.source.package || manifest.version !== item.latestVersion) throw new Error("新版 MCP 包校验失败");
         after = path.join(root, installation.entry);
         if (!(await fs.stat(after)).isFile() || await fs.realpath(after) !== after) throw new Error("新版 MCP 缺少原启动文件或包含链接，已保留旧版本");
-        if (await fs.realpath(installation.root) !== originalRoot || !same(original, await folderBlobs(originalRoot, "package"))) throw new UpdateSkipped("安装期间原 MCP 包已变化，已跳过更新");
+        if (await fs.realpath(installation.root) !== originalRoot || !same(original, await folderBlobs(originalRoot, { kind: "mcp", complete: true }))) throw new UpdateSkipped("安装期间原 MCP 包已变化，已跳过更新");
         installedDirectory = directory;
-        verifyOriginal = async () => { if (await fs.realpath(installation.root) !== originalRoot || !same(original, await folderBlobs(originalRoot, "package"))) throw new UpdateSkipped("写入前原 MCP 包已变化，已跳过更新"); };
+        verifyOriginal = async () => { if (await fs.realpath(installation.root) !== originalRoot || !same(original, await folderBlobs(originalRoot, { kind: "mcp", complete: true }))) throw new UpdateSkipped("写入前原 MCP 包已变化，已跳过更新"); };
       } catch (error) {
         await fs.rm(directory, { recursive: true, force: true });
         if (error instanceof UpdateSkipped) throw error;
-        throw new Error("新版 MCP 安装或校验失败，已保留原启动配置");
+        const code = String(error.stderr || "").match(/^npm (?:error|ERR!) code ([A-Z][A-Z0-9_]{1,30})\s*$/m)?.[1] || (error.killed ? "TIMEOUT" : "");
+        throw new Error(phase + "失败" + (code ? "（" + code + "）" : "") + "，已保留原启动配置");
       }
     } else {
       const separator = item.source.type === "npm" ? "@" : "==";
@@ -259,11 +268,11 @@ export class ExtensionUpdater {
       if (await this.git(operation.root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== operation.branch) throw new UpdateSkipped("写入前 Git 分支已变化，已停止回退");
       await this.git(operation.root, ["reset", "--keep", operation.before]);
     } else if (operation.method === "skill-copy") {
-      if (digest(await folderBlobs(operation.target, true)) !== operation.afterHash) throw new UpdateSkipped("Skill 更新后有本地修改，无法覆盖回退");
-      if (digest(await folderBlobs(operation.backup, true)) !== operation.beforeHash) throw new Error("原版本备份校验失败");
+      if (digest(await folderBlobs(operation.target, { complete: true })) !== operation.afterHash) throw new UpdateSkipped("Skill 更新后有本地修改，无法覆盖回退");
+      if (digest(await folderBlobs(operation.backup, { complete: true })) !== operation.beforeHash) throw new Error("原版本备份校验失败");
       const replaced = path.join(path.dirname(operation.backup), "replaced");
       operation.state = "rolling-back"; await record(operation);
-      if (digest(await folderBlobs(operation.target, true)) !== operation.afterHash || digest(await folderBlobs(operation.backup, true)) !== operation.beforeHash) throw new UpdateSkipped("写入前 Skill 或备份已变化，已停止回退");
+      if (digest(await folderBlobs(operation.target, { complete: true })) !== operation.afterHash || digest(await folderBlobs(operation.backup, { complete: true })) !== operation.beforeHash) throw new UpdateSkipped("写入前 Skill 或备份已变化，已停止回退");
       await fs.rename(operation.target, replaced);
       try { await fs.rename(operation.backup, operation.target); } catch (error) { await fs.rename(replaced, operation.target); throw error; }
     } else {
@@ -278,11 +287,11 @@ export class ExtensionUpdater {
   }
   async recover(operation) {
     if (operation.method === "skill-copy") {
-      if (!(await exists(operation.target)) && await exists(operation.backup) && digest(await folderBlobs(operation.backup, true)) === operation.beforeHash) { await fs.rename(operation.backup, operation.target); return "rolled-back"; }
+      if (!(await exists(operation.target)) && await exists(operation.backup) && digest(await folderBlobs(operation.backup, { complete: true })) === operation.beforeHash) { await fs.rename(operation.backup, operation.target); return "rolled-back"; }
       if (await exists(operation.target)) {
-        const current = digest(await folderBlobs(operation.target, true));
+        const current = digest(await folderBlobs(operation.target, { complete: true }));
         if (current === operation.beforeHash && operation.state === "rolling-back") return "rolled-back";
-        if (current === operation.afterHash && await exists(operation.backup) && digest(await folderBlobs(operation.backup, true)) === operation.beforeHash) return "updated";
+        if (current === operation.afterHash && await exists(operation.backup) && digest(await folderBlobs(operation.backup, { complete: true })) === operation.beforeHash) return "updated";
       }
     } else if (operation.method === "git") {
       const current = await this.git(operation.root, ["rev-parse", "HEAD"]);
