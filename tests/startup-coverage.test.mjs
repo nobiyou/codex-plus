@@ -9,6 +9,7 @@ import { buildStartupSource } from "../source/startup-splash.mjs";
 
 const css = await fs.readFile(new URL("../source/theme.css", import.meta.url), "utf8");
 const injector = await fs.readFile(new URL("../source/injector.mjs", import.meta.url), "utf8");
+const accentOptions = vm.runInNewContext("(" + injector.match(/const ACCENT_OPTIONS = (\{[\s\S]*?\n\});/)[1] + ")");
 const documentPolicy = injector.slice(injector.indexOf("function isCodexAppDocument("), injector.indexOf("function isInjectableTarget("));
 const assetFactory = injector.slice(injector.indexOf("function buildThemeAssetSource("), injector.indexOf("async function applyThemeAssets("));
 const assetSource = vm.runInNewContext(`${documentPolicy}\n${assetFactory}\nbuildThemeAssetSource("data:image/png;base64,default-wall", "data:image/png;base64,default-logo", { aria: {wallpaper: "data:image/png;base64,blue-wall", logo: "data:image/png;base64,blue-logo"}})`, { TINY_JPEG: "tiny-jpeg", TINY_PNG: "tiny-png" });
@@ -29,9 +30,18 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
   const appRoot = { querySelectorAll: () => ["empty", "blank", "loading-text"].includes(content.kind) ? [] : [contentNode] };
   const listeners = new Map();
   const frames = new Map();
+  const timers = new Map();
+  let now = 0;
+  let timerId = 0;
   let frameId = 0;
   let observer;
-  const window = { matchMedia: () => ({ matches: reduced }), addEventListener: (type, callback) => listeners.set(type, callback), removeEventListener: (type) => listeners.delete(type), requestAnimationFrame: (callback) => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame: (id) => frames.delete(id) };
+  const motion = { matches: reduced, addEventListener: (_type, callback) => listeners.set("motion", callback), removeEventListener: () => listeners.delete("motion") };
+  const window = {
+    matchMedia: query => query.includes("reduced-motion") ? motion : { matches: false },
+    addEventListener: (type, callback) => listeners.set(type, callback), removeEventListener: (type) => listeners.delete(type),
+    requestAnimationFrame: (callback) => { frames.set(++frameId, callback); return frameId; }, cancelAnimationFrame: (id) => frames.delete(id),
+    setTimeout: (callback, delay) => { timers.set(++timerId, { at: now + delay, callback }); return timerId; }, clearTimeout: id => timers.delete(id),
+  };
   const document = {
     readyState: parsing ? "loading" : "complete", documentElement: parsing ? null : root, head: root, body: root,
     getElementById: (id) => id === "root" ? appRoot : null,
@@ -44,12 +54,53 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
     ["codex-plus-pro-wallpaper-v1", "data:image/png;base64,custom-wall"],
     ["codex-plus-pro-logo-v1", "data:image/png;base64,custom-logo"],
   ]);
-  const source = buildStartupSource({ css, assetSource });
+  const source = buildStartupSource({ css, assetSource, accentOptions });
   const context = vm.createContext({ window, document, URL, location: new URL(`app://-/index.html${route ? `?initialRoute=${encodeURIComponent(route)}` : ""}`), localStorage: { getItem: (key) => saved.get(key) || null }, MutationObserver: class { constructor(callback) { observer = this; this.callback = callback; } observe() { this.active = true; } disconnect() { this.active = false; } } });
   const run = () => vm.runInContext(source, context);
   const paint = () => { const pending = [...frames]; frames.clear(); for (const [, callback] of pending) callback(); };
-  return { window, document, nativeLoader, reactLoader, content, styles, splashes, properties, attributes, listeners, saved, run, mutate: () => { if (observer?.active) observer.callback(); }, paint, frames, observing: () => observer?.active, root };
+  const advance = milliseconds => { now += milliseconds; for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.callback(); } };
+  return { window, document, nativeLoader, reactLoader, content, styles, splashes, properties, attributes, listeners, saved, run, mutate: () => { if (observer?.active) observer.callback(); }, paint, frames, timers, advance, reduceMotion: () => { motion.matches = true; listeners.get("motion")?.(); }, observing: () => observer?.active, root };
 }
+
+test("a fast workspace waits for the complete 3.2-second introduction", () => {
+  const f = fixture();
+  f.run();
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate();
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].removed, false, "fast startup must not truncate the five keyframes");
+  f.advance(3199);
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].removed, false);
+  f.advance(1);
+  f.paint();
+  assert.equal(f.splashes[0].removed, false, "the actual destination still needs a stable painted frame");
+  f.paint();
+  assert.equal(f.splashes[0].removed, true);
+  assert.equal(f.timers.size, 0);
+});
+
+test("reduced motion shows the final state and adds no artificial startup delay", () => {
+  for (const reduced of [false, true]) {
+    const f = fixture({ reduced });
+    f.run();
+    if (!reduced) {
+      assert.equal(f.timers.size, 1);
+      f.reduceMotion();
+    }
+    assert.equal(f.timers.size, 0);
+    f.nativeLoader.isConnected = false;
+    f.content.kind = "workspace";
+    f.mutate();
+    f.paint();
+    f.paint();
+    assert.equal(f.splashes[0].removed, true);
+    assert.equal(f.listeners.size, 0);
+  }
+});
 
 test("startup coverage survives document load and ends with painted application content", () => {
   const f = fixture({ parsing: true });
@@ -61,6 +112,7 @@ test("startup coverage survives document load and ends with painted application 
   assert.equal(f.splashes[0].className, "codex-plus-pro-startup-splash");
   f.document.readyState = "complete";
   f.listeners.get("DOMContentLoaded")();
+  f.advance(60000);
   for (let second = 0; second < 60; second++) f.mutate();
   assert.equal(f.attributes.get("data-codex-plus-startup-state"), "loading");
   assert.equal(f.styles[0].removed, false, "slow application initialization must keep its themed loader");
@@ -88,6 +140,7 @@ test("startup uses saved theme assets, custom uploads, and dark/reduced-motion C
     const f = fixture({ custom, reduced: true });
     f.run();
     assert.equal(f.attributes.get("data-codex-plus-accent"), "aria");
+    assert.equal(f.properties.get("--codex-plus-accent"), "#3b82c4", "saved theme colors must be present before the renderer initializes");
     assert.ok(f.properties.get("--codex-pokedex-wallpaper").includes(custom ? "custom-wall" : "blue-wall"));
     assert.ok(f.properties.get("--codex-pokedex-ball-logo").includes(custom ? "custom-logo" : "blue-logo"));
     assert.match(f.styles[0].textContent, /--startup-background:\s*#f4f8fd/);
@@ -115,11 +168,13 @@ test("page exit releases the startup observer and stylesheet", () => {
   assert.equal(f.observing(), false);
   assert.equal(f.styles[0].removed, true);
   assert.equal(f.listeners.size, 0);
+  assert.equal(f.timers.size, 0, "page exit must cancel the introduction deadline");
 });
 
 test("removing the HTML loader does not expose the React bootstrap logo", () => {
   const f = fixture();
   f.run();
+  f.advance(3200);
   f.nativeLoader.isConnected = false;
   f.reactLoader.isConnected = true;
   f.content.kind = "workspace";
@@ -140,6 +195,7 @@ test("a late injector also covers the React phase and exposes login/error recove
   for (const destination of ["workspace", "login", "error"]) {
     const f = fixture({ loader: false, react: true });
     f.run();
+    f.advance(3200);
     assert.equal(f.splashes.length, 1);
     f.reactLoader.isConnected = false;
     f.content.kind = destination;
@@ -168,6 +224,7 @@ test("hidden bridges, fallback chrome, and empty wrappers cannot finish startup"
 test("a new loading phase cancels a pending reveal and page exit cancels animation frames", () => {
   const f = fixture();
   f.run();
+  f.advance(3200);
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();

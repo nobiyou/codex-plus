@@ -5,10 +5,11 @@ import vm from "node:vm";
 import { createExtensionUpdatesUI } from "../source/extension-updates-ui.mjs";
 
 const source = await fs.readFile(new URL("../source/injector.mjs", import.meta.url), "utf8");
+const accentOptions = vm.runInNewContext("(" + source.match(/const ACCENT_OPTIONS = (\{[\s\S]*?\n\});/)[1] + ")");
 const section = (start, end) => source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start)));
 const policy = source.includes("function isCodexAppDocument(") ? section("function isCodexAppDocument(", "function isInjectableTarget(") : "";
 const factory = (body, expression) => vm.runInNewContext(policy + body + "\n" + expression, {
-  URL, hostVersionInfo: {}, WINDOWS_SCOPE_A_VERSION: "test", createExtensionUpdatesUI, TINY_JPEG: "tiny-jpeg", TINY_PNG: "tiny-png", log() {},
+  URL, hostVersionInfo: {}, WINDOWS_SCOPE_A_VERSION: "test", ACCENT_OPTIONS: accentOptions, createExtensionUpdatesUI, TINY_JPEG: "tiny-jpeg", TINY_PNG: "tiny-png", log() {},
 });
 const aboutUrl = "data:text/html;charset=utf-8," + encodeURIComponent('<html><title>关于 ChatGPT</title><button>确定</button></html>');
 const mainUrl = "app://-/index.html";

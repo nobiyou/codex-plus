@@ -17,6 +17,7 @@ test("renderer injection waits for a document node before initializing decoratio
   const injection = vm.runInNewContext(`${documentPolicy}\n${factorySource}\nbuildInjectionSource("")`, {
     hostVersionInfo: {},
     WINDOWS_SCOPE_A_VERSION: "test",
+    ACCENT_OPTIONS: vm.runInNewContext("(" + source.match(/const ACCENT_OPTIONS = (\{[\s\S]*?\n\});/)[1] + ")"),
     createExtensionUpdatesUI,
   });
   const listeners = [];

@@ -37,6 +37,15 @@ let hostFeatureSettings = {
   petMotion: "full",
   modelDensity: "compact",
 };
+// Shared by the first-paint splash and the settings renderer.
+const ACCENT_OPTIONS = {
+  pokedex: { label: "图鉴红", color: "#b61f31", dark: "#751522", highlight: "#d29a18" },
+  lagoon: { label: "海湾青", color: "#277d91", dark: "#175263", highlight: "#d29a18" },
+  forest: { label: "常青绿", color: "#3f7f59", dark: "#28533b", highlight: "#d29a18" },
+  graphite: { label: "石墨黑", color: "#4b4f55", dark: "#2e3135", highlight: "#c5902b" },
+  aria: { label: "清风蓝", color: "#3b82c4", dark: "#1e4f8c", highlight: "#7eb8e8" },
+  adaptive: { label: "自适应", color: "#b61f31", dark: "#751522", highlight: "#d29a18" },
+};
 const WINDOWS_SCOPE_A_VERSION = (await fs.readFile(path.join(scriptDirectory, "VERSION"), "utf8")).trim();
 const scriptVersion = WINDOWS_SCOPE_A_VERSION + " (Scope B2 pet - Windows)";
 const hostVersionInfo = normalizeVersionInfo({
@@ -98,6 +107,7 @@ const themeCss = cssTemplate
   .replaceAll("__POKEBALL_LOGO_DATA_URI__", logoDataUri);
 const startupSource = buildStartupSource({
   css: cssTemplate,
+  accentOptions: ACCENT_OPTIONS,
   assetSource: buildThemeAssetSource(artworkDataUri, logoDataUri, accentAssetPacks),
 });
 const packKeys = Object.keys(accentAssetPacks);
@@ -1703,14 +1713,7 @@ function buildInjectionSource(css) {
       petMotion: "full",
       modelDensity: "compact",
     };
-    const ACCENT_OPTIONS = {
-      pokedex: { label: "图鉴红", color: "#b61f31", dark: "#751522", highlight: "#d29a18" },
-      lagoon: { label: "海湾青", color: "#277d91", dark: "#175263", highlight: "#d29a18" },
-      forest: { label: "常青绿", color: "#3f7f59", dark: "#28533b", highlight: "#d29a18" },
-      graphite: { label: "石墨黑", color: "#4b4f55", dark: "#2e3135", highlight: "#c5902b" },
-      aria: { label: "清风蓝", color: "#3b82c4", dark: "#1e4f8c", highlight: "#7eb8e8" },
-      adaptive: { label: "自适应", color: "#b61f31", dark: "#751522", highlight: "#d29a18" },
-    };
+    const ACCENT_OPTIONS = ${JSON.stringify(ACCENT_OPTIONS)};
     // When wallpaper/logo are on "default", follow the selected accent pack.
     // Custom uploads are never overwritten by accent changes.
     const resolveAccentPack = (accentKey) => {
