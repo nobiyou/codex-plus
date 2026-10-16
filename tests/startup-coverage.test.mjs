@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { buildStartupSource } from "../source/startup-splash.mjs";
+import { parseStartupTimingEvent } from "../source/startup-timing.mjs";
 
 const css = await fs.readFile(new URL("../source/theme.css", import.meta.url), "utf8");
 const injector = await fs.readFile(new URL("../source/injector.mjs", import.meta.url), "utf8");
@@ -14,7 +15,12 @@ const documentPolicy = injector.slice(injector.indexOf("function isCodexAppDocum
 const assetFactory = injector.slice(injector.indexOf("function buildThemeAssetSource("), injector.indexOf("async function applyThemeAssets("));
 const assetSource = vm.runInNewContext(`${documentPolicy}\n${assetFactory}\nbuildThemeAssetSource("data:image/png;base64,default-wall", "data:image/png;base64,default-logo", { aria: {wallpaper: "data:image/png;base64,blue-wall", logo: "data:image/png;base64,blue-logo"}})`, { TINY_JPEG: "tiny-jpeg", TINY_PNG: "tiny-png" });
 
-function fixture({ route = "", theme = true, parsing = false, loader = true, react = false, accent = "aria", custom = false, reduced = false, hidden = false } = {}) {
+const INTRO_MS = 6400;
+const timingKey = "codex-plus-pro-startup-timing-v1";
+const epoch = 1792120000000;
+const observation = (visibleReadyMs, overrides = {}) => ({ readyAt: epoch, launcherMs: visibleReadyMs + 2000, rendererMs: visibleReadyMs, visibleReadyMs, hiddenMs: 0, introMs: INTRO_MS, overlayMs: Math.max(INTRO_MS, visibleReadyMs) + 180, ...overrides });
+
+function fixture({ history, launcherStartedAt = epoch - 2000, navigationType = "navigate", storageBlocked = false, route = "", theme = true, parsing = false, loader = true, react = false, accent = "aria", custom = false, reduced = false, hidden = false } = {}) {
   const styles = [];
   const splashes = [];
   const properties = new Map();
@@ -22,7 +28,7 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
   const root = { setAttribute: (key, value) => attributes.set(key, value), getAttribute: (key) => attributes.get(key), hasAttribute: (key) => attributes.has(key), classList: { toggle() {} }, style: { setProperty: (key, value) => properties.set(key, value) }, appendChild: (node) => {
     node.parentNode = root;
     (node.tag === "style" ? styles : splashes).push(node);
-    if (node.tag === "div" && !motion.matches && node.getAttribute("data-playback") !== "paused") motionEndsAt = now + 2800;
+    if (node.tag === "div" && !motion.matches && node.getAttribute("data-playback") !== "paused") motionEndsAt = now + INTRO_MS - 400;
   } };
   const nativeLoader = { isConnected: loader, children: ["native-logo"], removeAttribute() {}, replaceChildren(...children) { this.children = children; } };
   const reactLoader = { isConnected: react };
@@ -37,7 +43,7 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
   const timers = new Map();
   let now = 0;
   let motionEndsAt = null;
-  let motionRemaining = 2800;
+  let motionRemaining = INTRO_MS - 400;
   let timerId = 0;
   let frameId = 0;
   let observer;
@@ -54,8 +60,9 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
     getElementById: (id) => id === "root" ? appRoot : null,
     querySelector: (selector) => nativeLoader.isConnected && selector.includes(".startup-loader") ? nativeLoader : reactLoader.isConnected && selector.includes("_delayedBlossom_") ? reactLoader : null,
     addEventListener: (type, callback) => listeners.set(type, callback), removeEventListener: (type) => listeners.delete(type),
-    createElement: (tag) => ({ tag, removed: false, attributes: new Map(), listeners: new Map(), addEventListener(type, callback) { this.listeners.set(type, callback); }, removeEventListener(type) { this.listeners.delete(type); }, setAttribute(key, value) {
+    createElement: (tag) => ({ tag, style: { setProperty() {} }, removed: false, attributes: new Map(), listeners: new Map(), addEventListener(type, callback) { this.listeners.set(type, callback); }, removeEventListener(type) { this.listeners.delete(type); }, setAttribute(key, value) {
       this.attributes.set(key, value);
+      if (key === "data-intro-ms") motionRemaining = Number(value) - 400;
       if (key === "data-playback" && !motion.matches) {
         if (value === "running" && motionEndsAt === null) motionEndsAt = now + motionRemaining;
         else if (value === "paused" && motionEndsAt !== null) { motionRemaining = motionEndsAt - now; motionEndsAt = null; }
@@ -67,8 +74,10 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
     ["codex-plus-pro-wallpaper-v1", "data:image/png;base64,custom-wall"],
     ["codex-plus-pro-logo-v1", "data:image/png;base64,custom-logo"],
   ]);
-  const source = buildStartupSource({ css, assetSource, accentOptions });
-  const context = vm.createContext({ window, document, URL, performance: { now: () => now }, location: new URL(`app://-/index.html${route ? `?initialRoute=${encodeURIComponent(route)}` : ""}`), localStorage: { getItem: (key) => saved.get(key) || null }, MutationObserver: class { constructor(callback) { observer = this; this.callback = callback; } observe() { this.active = true; } disconnect() { this.active = false; } } });
+  if (history) saved.set(timingKey, JSON.stringify({ version: 1, samples: history }));
+  const logs = [];
+  const source = buildStartupSource({ css, assetSource, accentOptions, launcherStartedAt });
+  const context = vm.createContext({ window, document, URL, console: { info: (...args) => logs.push(args), warn: (...args) => logs.push(args) }, performance: { now: () => now, timeOrigin: epoch, getEntriesByType: () => [{ type: navigationType }] }, location: new URL(`app://-/index.html${route ? `?initialRoute=${encodeURIComponent(route)}` : ""}`), localStorage: { getItem: (key) => { if (storageBlocked) throw Error("blocked"); return saved.get(key) || null; }, setItem: (key, value) => saved.set(key, value) }, MutationObserver: class { constructor(callback) { observer = this; this.callback = callback; } observe() { this.active = true; } disconnect() { this.active = false; } } });
   const paint = () => { const pending = [...frames]; frames.clear(); for (const [, callback] of pending) callback(); };
   const run = (paintFirstFrame = true) => {
     vm.runInContext(source, context);
@@ -94,8 +103,93 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
     now = end;
   };
   const visibility = hidden => { document.hidden = hidden; listeners.get("visibilitychange")?.(); };
-  return { window, document, nativeLoader, reactLoader, content, styles, splashes, properties, attributes, listeners, saved, run, mutate: () => { if (observer?.active) observer.callback(); }, paint, frames, timers, advance, visibility, delayMotion: milliseconds => { motionEndsAt += milliseconds; }, reduceMotion: () => { motion.matches = true; motionEndsAt = null; listeners.get("motion")?.(); }, observing: () => observer?.active, root };
+  return { window, document, nativeLoader, reactLoader, content, styles, splashes, properties, attributes, listeners, saved, logs, run, mutate: () => { if (observer?.active) observer.callback(); }, paint, frames, timers, advance, visibility, delayMotion: milliseconds => { motionEndsAt += milliseconds; }, reduceMotion: () => { motion.matches = true; motionEndsAt = null; listeners.get("motion")?.(); }, observing: () => observer?.active, root };
 }
+
+test("actual readiness is recorded before the intro hold and reused on a subsequent launch", () => {
+  const f = fixture();
+  f.run();
+  f.advance(1000);
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate(); f.paint(); f.paint();
+  assert.equal(f.saved.has(timingKey), false, "do not save a run before a successful reveal");
+  f.advance(INTRO_MS - 1000); f.paint(); f.paint(); f.advance(180);
+  const saved = JSON.parse(f.saved.get(timingKey));
+  assert.deepEqual(saved.samples, [observation(1000, { readyAt: epoch + 1000, overlayMs: INTRO_MS + 180 })]);
+  assert.equal(f.logs.filter(args => args[0] === timingKey).length, 1);
+  assert.deepEqual(JSON.parse(f.logs.find(args => args[0] === timingKey)[1]), saved.samples[0]);
+  const next = fixture({ history: saved.samples });
+  next.run();
+  assert.equal(next.splashes[0].getAttribute("data-intro-ms"), "5000");
+});
+
+test("history adjusts the entrance but does not place a deadline on a slow workspace", () => {
+  const f = fixture({ history: [observation(8000)] });
+  f.run();
+  assert.equal(f.splashes[0].getAttribute("data-intro-ms"), "7250");
+  f.advance(7249);
+  assert.equal(f.splashes[0].getAttribute("data-waiting"), undefined);
+  f.advance(1);
+  assert.equal(f.splashes[0].getAttribute("data-waiting"), "true");
+  f.advance(15000);
+  assert.equal(f.splashes[0].removed, false);
+  assert.equal(JSON.parse(f.saved.get(timingKey)).samples.length, 1);
+});
+
+test("hidden time is measured separately and excluded from adaptive pacing", () => {
+  const f = fixture();
+  f.run(); f.advance(1000); f.visibility(true); f.advance(5000);
+  f.visibility(false); f.paint(); f.paint(); f.advance(2000);
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate(); f.paint(); f.paint();
+  f.advance(INTRO_MS - 3000); f.paint(); f.paint(); f.advance(180);
+  const saved = JSON.parse(f.saved.get(timingKey));
+  assert.deepEqual(saved.samples, [observation(3000, { readyAt: epoch + 8000, rendererMs: 8000, launcherMs: 10000, hiddenMs: 5000, overlayMs: INTRO_MS + 5180 })]);
+  const next = fixture({ history: saved.samples }); next.run();
+  assert.equal(next.splashes[0].getAttribute("data-intro-ms"), String(INTRO_MS));
+});
+
+test("transient readiness is discarded when a loader returns", () => {
+  const f = fixture(); f.run(); f.advance(1000);
+  f.nativeLoader.isConnected = false; f.content.kind = "workspace";
+  f.mutate(); f.paint(); f.paint();
+  f.advance(1000); f.reactLoader.isConnected = true; f.mutate();
+  f.advance(6000); f.reactLoader.isConnected = false;
+  f.mutate(); f.paint(); f.paint(); f.advance(180);
+  assert.equal(JSON.parse(f.saved.get(timingKey)).samples[0].visibleReadyMs, 8000);
+});
+
+test("aborted and reloaded documents do not train successful startup history", () => {
+  const aborted = fixture(); aborted.run(); aborted.advance(1000);
+  aborted.nativeLoader.isConnected = false; aborted.content.kind = "workspace";
+  aborted.mutate(); aborted.paint(); aborted.paint();
+  aborted.listeners.get("pagehide")();
+  assert.equal(aborted.saved.has(timingKey), false);
+  for (const navigationType of ["reload", "back_forward"]) {
+    const f = fixture({ reduced: true, navigationType }); f.run();
+    f.nativeLoader.isConnected = false; f.content.kind = "workspace";
+    f.mutate(); f.paint(); f.paint();
+    assert.equal(f.splashes[0].removed, true);
+    assert.equal(f.saved.has(timingKey), false);
+  }
+});
+
+test("reduced motion still records real readiness and rejects stale launcher timestamps", () => {
+  const f = fixture({ reduced: true, launcherStartedAt: epoch - 600000 }); f.run(); f.advance(1000);
+  f.nativeLoader.isConnected = false; f.content.kind = "workspace";
+  f.mutate(); f.paint(); f.paint();
+  assert.deepEqual(JSON.parse(f.saved.get(timingKey)).samples, [observation(1000, { readyAt: epoch + 1000, launcherMs: null, overlayMs: 1000 })]);
+});
+
+test("unavailable storage does not prevent the workspace from being revealed", () => {
+  const f = fixture({ storageBlocked: true, reduced: true }); f.run();
+  f.nativeLoader.isConnected = false; f.content.kind = "workspace";
+  f.mutate(); f.paint(); f.paint();
+  assert.equal(f.splashes[0].removed, true);
+  assert.equal(f.logs.some(args => String(args[0]).includes("history could not be read")), true);
+});
 
 test("normal startup holds the finished composition before fading into painted content", () => {
   const f = fixture();
@@ -107,7 +201,7 @@ test("normal startup holds the finished composition before fading into painted c
   f.paint();
   f.paint();
   assert.equal(f.splashes[0].removed, false);
-  f.advance(2199);
+  f.advance(INTRO_MS - 1001);
   f.paint();
   f.paint();
   assert.equal(f.splashes[0].removed, false);
@@ -133,7 +227,7 @@ test("a fast workspace still shows the full intro and a real final hold", () => 
   f.mutate();
   f.paint();
   f.paint();
-  f.advance(3099);
+  f.advance(INTRO_MS - 101);
   f.paint();
   f.paint();
   assert.equal(f.splashes[0].getAttribute("data-phase"), undefined, "fast readiness must not accelerate away the animation");
@@ -159,7 +253,7 @@ test("startup waits for its first painted frame before consuming the animation",
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
-  f.advance(3199);
+  f.advance(INTRO_MS - 1);
   f.paint(); f.paint();
   assert.equal(f.splashes[0].getAttribute("data-phase"), undefined);
   f.advance(1);
@@ -179,7 +273,7 @@ test("a hidden startup begins the full animation only when presented", () => {
   assert.equal(f.splashes[0].getAttribute("data-playback"), "paused");
   f.visibility(false);
   f.paint(); f.paint();
-  f.advance(3199);
+  f.advance(INTRO_MS - 1);
   f.paint(); f.paint();
   assert.equal(f.splashes[0].getAttribute("data-phase"), undefined);
   f.advance(1);
@@ -190,7 +284,7 @@ test("a hidden startup begins the full animation only when presented", () => {
 });
 
 test("hiding during the animation or final hold preserves the remaining visible time", () => {
-  for (const visibleTime of [900, 2900]) {
+  for (const visibleTime of [900, INTRO_MS - 300]) {
     const f = fixture();
     f.run();
     f.advance(visibleTime);
@@ -203,7 +297,7 @@ test("hiding during the animation or final hold preserves the remaining visible 
     assert.equal(f.frames.size, 0);
     f.visibility(false);
     f.paint(); f.paint();
-    f.advance(3200 - visibleTime - 1);
+    f.advance(INTRO_MS - visibleTime - 1);
     f.paint(); f.paint();
     assert.equal(f.splashes[0].getAttribute("data-phase"), undefined);
     f.advance(1);
@@ -217,7 +311,7 @@ test("hiding during the animation or final hold preserves the remaining visible 
 test("hiding during the exit fade restores the cover until visible again", () => {
   const f = fixture();
   f.run();
-  f.advance(3200);
+  f.advance(INTRO_MS);
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
@@ -259,7 +353,7 @@ test("delayed animation rendering cannot consume the final hold", () => {
   f.mutate();
   f.paint();
   f.paint();
-  f.advance(2999);
+  f.advance(INTRO_MS - 201);
   f.paint();
   f.paint();
   assert.equal(f.splashes[0].getAttribute("data-phase"), undefined);
@@ -328,7 +422,7 @@ test("startup coverage survives document load and ends with painted application 
 test("slow startup enters continuous loading as soon as the intro finishes", () => {
   const f = fixture();
   f.run();
-  f.advance(3199);
+  f.advance(INTRO_MS - 1);
   assert.equal(f.splashes[0].getAttribute("data-waiting"), undefined);
   f.advance(1);
   assert.equal(f.splashes[0].getAttribute("data-waiting"), "true");
@@ -345,7 +439,7 @@ test("a ready workspace leaves after the intro without entering the loading loop
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
-  f.advance(2200);
+  f.advance(INTRO_MS - 1000);
   f.paint(); f.paint();
   assert.equal(f.splashes[0].getAttribute("data-waiting"), undefined);
   assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
@@ -359,7 +453,7 @@ test("a loader returning during reveal starts continuous feedback immediately", 
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
-  f.advance(3200);
+  f.advance(INTRO_MS);
   f.paint(); f.paint();
   assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
   f.reactLoader.isConnected = true;
@@ -416,7 +510,7 @@ test("page exit releases the startup observer and stylesheet", () => {
 test("removing the HTML loader does not expose the React bootstrap logo", () => {
   const f = fixture();
   f.run();
-  f.advance(3200);
+  f.advance(INTRO_MS);
   f.nativeLoader.isConnected = false;
   f.reactLoader.isConnected = true;
   f.content.kind = "workspace";
@@ -438,7 +532,7 @@ test("a late injector also covers the React phase and exposes login/error recove
   for (const destination of ["workspace", "login", "error"]) {
     const f = fixture({ loader: false, react: true });
     f.run();
-    f.advance(3200);
+    f.advance(INTRO_MS);
     assert.equal(f.splashes.length, 1);
     f.reactLoader.isConnected = false;
     f.content.kind = destination;
@@ -468,7 +562,7 @@ test("hidden bridges, fallback chrome, and empty wrappers cannot finish startup"
 test("a new loading phase cancels a pending reveal and page exit cancels animation frames", () => {
   const f = fixture();
   f.run();
-  f.advance(3200);
+  f.advance(INTRO_MS);
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
@@ -488,7 +582,7 @@ test("a new loading phase cancels a pending reveal and page exit cancels animati
 test("a returning loader aborts the fade and the next reveal rechecks painted content", () => {
   const f = fixture();
   f.run();
-  f.advance(3200);
+  f.advance(INTRO_MS);
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
@@ -514,7 +608,7 @@ test("reduced motion or page exit during a fade releases every pending resource"
   for (const action of [f => f.reduceMotion(), f => f.listeners.get("pagehide")()]) {
     const f = fixture();
     f.run();
-    f.advance(3200);
+    f.advance(INTRO_MS);
     f.nativeLoader.isConnected = false;
     f.content.kind = "workspace";
     f.mutate();
@@ -534,13 +628,17 @@ test("a new renderer installs startup immediately before subscribing to runtime 
   const bootstrap = injector.slice(injector.indexOf("async function attachToPageTarget("), injector.indexOf("  const refreshPageTheme =", injector.indexOf("async function attachToPageTarget("))) + "}";
   for (const failing of [false, true]) {
     const calls = [];
-    const browser = { send: async (method, params) => {
+    const logs = [];
+    const handlers = new Map();
+    const browser = { on: (event, callback) => handlers.set(event, callback), send: async (method, params) => {
+      if (method === "Runtime.enable") assert.equal(handlers.has("Runtime.consoleAPICalled"), true, "subscribe before buffered console events arrive");
       calls.push({ method, params });
       if (failing && method === "Page.addScriptToEvaluateOnNewDocument") throw new Error("registration failed");
       return {};
     } };
     const attach = vm.runInNewContext(`${documentPolicy}\n${bootstrap}\nattachToPageTarget`, {
       pageSessions: new Map(), pageTargetsBySessionId: new Map(), buildInjectionSource: () => "pageRuntime()", petNotificationsSource: "petRuntime()", startupSource: "nativeStartup()", invalidatePageSession() {},
+      isFeatureSettingsOwnerTarget: () => true, parseStartupTimingEvent, log: message => logs.push(message),
     });
     const pending = attach(browser, { targetId: "first-page" }, "paused-session");
     if (failing) await assert.rejects(pending, /registration failed/);
@@ -550,7 +648,16 @@ test("a new renderer installs startup immediately before subscribing to runtime 
     assert.ok(calls[registered].params.source.startsWith("nativeStartup()"));
     assert.equal(calls[registered].params.runImmediately, true);
     assert.ok(!calls.some(({ method }) => method === "Runtime.runIfWaitingForDebugger"));
-    if (!failing) assert.equal(calls[1].method, "Runtime.enable");
+    if (!failing) {
+      assert.equal(calls[1].method, "Runtime.enable");
+      const notify = (value, sessionId = "paused-session") => handlers.get("Runtime.consoleAPICalled")({ type: "info", args: [{ value: timingKey }, { value: JSON.stringify(value) }] }, { sessionId });
+      notify(observation(8000), "other-session");
+      notify({ secret: "do not log" });
+      assert.equal(logs.length, 0);
+      notify(observation(8000));
+      assert.equal(logs.length, 1);
+      assert.match(logs[0], /Startup timing .*"launcherMs":10000.*"visibleReadyMs":8000/);
+    }
   }
 });
 
@@ -575,6 +682,7 @@ $version = "test"
 $rendererPort = 12229
 $inspectorPort = 12329
 $argumentLine = "fixture"
+$startupStartedAtMs = 1792120000000
 $updateState = "unknown"
 $codex = [pscustomobject]@{ Path="fixture.exe";Source="fixture";Version="test";AppKind="Codex";AppUserModelId=$null }
 $storeAppx = $null
@@ -587,6 +695,8 @@ function Show-ErrorDialog { param($Message) throw $Message }
 function Start-Process {
   param($FilePath,$ArgumentList,[switch]$PassThru,$WindowStyle,$RedirectStandardOutput,$RedirectStandardError)
   if (!(Test-Path -LiteralPath $RedirectStandardOutput) -or !(Test-Path -LiteralPath $RedirectStandardError)) { throw "logs missing before injector" }
+  $timingIndex = [Array]::IndexOf($ArgumentList, "--startup-started-at-ms")
+  if ($timingIndex -lt 0 -or $ArgumentList[$timingIndex + 1] -ne [string]$startupStartedAtMs) { throw "launcher timestamp missing from injector arguments" }
   $launchOrder.Add("injector")
   Set-Content -LiteralPath $startupReadyFile -Value "prepared"
   return [pscustomobject]@{Id=12345;HasExited=$false}

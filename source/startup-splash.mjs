@@ -1,3 +1,5 @@
+import { createStartupTiming, normalizeStartupSample, STARTUP_TIMING_MARKER } from "./startup-timing.mjs";
+
 // HTML and React both own loading phases. Keep the cover outside their root.
 const STARTUP_HOLD_MS = 400;
 const STARTUP_EXIT_MS = 180;
@@ -187,8 +189,17 @@ function startupTokens(css) {
   return blocks.join("\n");
 }
 
-export function buildStartupSource({ css, assetSource, accentOptions }) {
-  const style = startupTokens(css) + "\n" + STARTUP_STYLE;
+export function buildStartupSource({ css, assetSource, accentOptions, launcherStartedAt = null }) {
+  // Scale only the entrance. Continuous loading motion keeps a calm fixed pace.
+  const scaledStyle = STARTUP_STYLE.replace(/animation:([^;{}]+);/g, (declaration, animation) => {
+    if (animation.includes("infinite")) return declaration;
+    const scaled = animation.replace("var(--delay,0ms)", "PARTICLE_DELAY")
+      .replace(/(\d+)ms/g, "calc($1ms * var(--codex-plus-startup-time-scale,1))")
+      .replace("PARTICLE_DELAY", "calc(var(--delay,0ms) * var(--codex-plus-startup-time-scale,1))");
+    return "animation:" + scaled + ";";
+  });
+  const style = startupTokens(css) + "\n" + scaledStyle;
+  const launchEpoch = Number.isFinite(launcherStartedAt) && launcherStartedAt > 0 ? launcherStartedAt : null;
   return `(() => {
     if (location.protocol !== "app:" || location.pathname !== "/index.html" || new URL(location.href).searchParams.has("initialRoute")) return;
     if (window.__codexPlusProStartupShown) return;
@@ -196,6 +207,43 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
     let settings = {};
     try { settings = JSON.parse(localStorage.getItem("codex-plus-pro-settings-v1") || "{}") || {}; } catch {}
     if (settings.theme === false) return;
+
+    const normalizeStartupSample = ${normalizeStartupSample.toString()};
+    let timingStorage = null;
+    try { timingStorage = localStorage; } catch { console.warn("Startup timing storage is unavailable"); }
+    const timing = (${createStartupTiming.toString()})(timingStorage, message => console.warn(message));
+    const navigationType = performance.getEntriesByType?.("navigation")[0]?.type;
+    const recordLaunch = !navigationType || navigationType === "navigate";
+    const launchEpoch = ${JSON.stringify(launchEpoch)};
+    const timeOrigin = performance.timeOrigin || Date.now() - performance.now();
+    let overlayStartedAt = null;
+    let visibleSince = null;
+    let visibleElapsed = 0;
+    let hiddenSince = document.hidden ? performance.now() : null;
+    let hiddenElapsed = 0;
+    let readySample = null;
+    const trackVisibility = () => {
+      const now = performance.now();
+      if (document.hidden) {
+        if (hiddenSince === null) hiddenSince = now;
+        if (visibleSince !== null) { visibleElapsed += now - visibleSince; visibleSince = null; }
+      } else if (hiddenSince !== null) {
+        hiddenElapsed += now - hiddenSince;
+        hiddenSince = null;
+      }
+    };
+    const startPresentation = () => { if (visibleSince === null) visibleSince = performance.now(); };
+    const captureReadiness = () => {
+      if (readySample) return;
+      const now = performance.now();
+      const launcherMs = launchEpoch !== null && timeOrigin >= launchEpoch && timeOrigin - launchEpoch <= 120000 && timeOrigin + now - launchEpoch <= 300000
+        ? Math.round(timeOrigin + now - launchEpoch) : null;
+      readySample = {
+        readyAt: Math.round(timeOrigin + now), launcherMs, rendererMs: Math.round(now),
+        visibleReadyMs: Math.round(visibleElapsed + (visibleSince === null ? 0 : now - visibleSince)),
+        hiddenMs: Math.round(hiddenElapsed),
+      };
+    };
 
     let splash = null;
     let style = null;
@@ -244,15 +292,26 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       document.documentElement?.setAttribute("data-codex-plus-startup-state", "ready");
       if (window.__codexPlusProStartupSplashCleanup === cleanup) delete window.__codexPlusProStartupSplashCleanup;
     };
+    const finishStartup = () => {
+      if (recordLaunch && readySample && overlayStartedAt !== null) {
+        const sample = timing.record({ ...readySample, introMs: timing.introMs, overlayMs: Math.round(performance.now() - overlayStartedAt) });
+        if (sample) {
+          window.__codexPlusProStartupTiming = sample;
+          console.info(${JSON.stringify(STARTUP_TIMING_MARKER)}, JSON.stringify(sample));
+        }
+      }
+      cleanup();
+    };
     const reduceMotion = () => {
       if (!motionPreference.matches) return;
       introComplete = true;
       if (introTimer !== null) window.clearTimeout(introTimer);
       introTimer = null;
-      if (exitTimer !== null && contentReady()) { cleanup(); return; }
+      if (exitTimer !== null && contentReady()) { finishStartup(); return; }
       sync();
     };
-    const cancelReveal = () => {
+    const cancelReveal = (resetReadiness = true) => {
+      if (resetReadiness) readySample = null;
       if (readyFrame !== null) window.cancelAnimationFrame(readyFrame);
       readyFrame = null;
       if (exitTimer !== null) window.clearTimeout(exitTimer);
@@ -293,6 +352,7 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
         if (playbackFrame !== null) window.cancelAnimationFrame(playbackFrame);
         playbackFrame = null;
         splash.setAttribute("data-playback", "running");
+        startPresentation();
         return true;
       }
       if (splash.getAttribute("data-playback") === "running") return true;
@@ -303,6 +363,7 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
           playbackFrame = null;
           if (finished || document.hidden) return;
           splash.setAttribute("data-playback", "running");
+          startPresentation();
           holdFinalFrame();
           sync();
         });
@@ -310,17 +371,18 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       return false;
     };
     const reveal = () => {
-      if (motionPreference?.matches) { cleanup(); return; }
+      if (motionPreference?.matches) { finishStartup(); return; }
       splash.setAttribute("data-phase", "leaving");
       exitTimer = window.setTimeout(() => {
         exitTimer = null;
-        if (contentReady()) cleanup();
+        if (!document.hidden && contentReady()) finishStartup();
         else cancelReveal();
       }, ${STARTUP_EXIT_MS});
     };
     const applyAssets = () => { ${assetSource} };
     const sync = () => {
       if (finished) return;
+      trackVisibility();
       const root = document.documentElement;
       if (!root) return;
       if (!splash && document.readyState !== "loading" && !document.querySelector(loadingSelector)) { cleanup(); return; }
@@ -358,13 +420,16 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
         splash.setAttribute("aria-live", "polite");
         splash.setAttribute("aria-label", "正在加载 Codex Plus Pro");
         splash.setAttribute("data-playback", "paused");
+        splash.setAttribute("data-intro-ms", String(timing.introMs));
+        splash.style.setProperty("--codex-plus-startup-time-scale", String((timing.introMs - ${STARTUP_HOLD_MS}) / 2800));
         splash.innerHTML = ${JSON.stringify(STARTUP_MARKUP)};
         splash.addEventListener("animationend", introMotionEnded);
         (document.body || root).appendChild(splash);
+        overlayStartedAt = performance.now();
         root.setAttribute("data-codex-plus-startup-state", "loading");
       }
       if (document.body && splash.parentNode !== document.body) document.body.appendChild(splash);
-      if (!syncPlayback()) { cancelReveal(); return; }
+      if (!syncPlayback()) { cancelReveal(!contentReady()); return; }
       if (!contentReady()) {
         if (introComplete) splash.setAttribute("data-waiting", "true");
         cancelReveal();
@@ -377,6 +442,7 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
         readyFrame = window.requestAnimationFrame(() => {
           readyFrame = null;
           if (document.hidden || !contentReady()) { cancelReveal(); return; }
+          captureReadiness();
           if (!introComplete) return;
           reveal();
         });

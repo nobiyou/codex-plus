@@ -9,6 +9,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$startupStartedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SourceDir = Join-Path $ScriptRoot "source"
@@ -337,6 +338,7 @@ $injectorArgsList = [System.Collections.Generic.List[string]]::new()
 $injectorArgsList.Add($InjectorPath) | Out-Null
 Add-InjectorArg -Arguments $injectorArgsList -Name "--port" -Value ("{0}" -f $rendererPort)
 Add-InjectorArg -Arguments $injectorArgsList -Name "--main-port" -Value ("{0}" -f $inspectorPort)
+Add-InjectorArg -Arguments $injectorArgsList -Name "--startup-started-at-ms" -Value ([string]$startupStartedAtMs)
 Add-InjectorArg -Arguments $injectorArgsList -Name "--css" -Value $CssPath
 Add-InjectorArg -Arguments $injectorArgsList -Name "--wallpaper" -Value $WallpaperPath
 Add-InjectorArg -Arguments $injectorArgsList -Name "--logo" -Value $LogoPath

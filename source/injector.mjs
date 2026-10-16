@@ -4,6 +4,7 @@ import process from "node:process";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { buildStartupSource } from "./startup-splash.mjs";
+import { parseStartupTimingEvent } from "./startup-timing.mjs";
 import { ExtensionUpdateService } from "./extension-updates.mjs";
 import { createExtensionUpdatesUI } from "./extension-updates-ui.mjs";
 
@@ -107,6 +108,7 @@ const themeCss = cssTemplate
   .replaceAll("__POKEBALL_LOGO_DATA_URI__", logoDataUri);
 const startupSource = buildStartupSource({
   css: cssTemplate,
+  launcherStartedAt: Number(options["startup-started-at-ms"]),
   accentOptions: ACCENT_OPTIONS,
   assetSource: buildThemeAssetSource(artworkDataUri, logoDataUri, accentAssetPacks),
 });
@@ -691,6 +693,11 @@ async function attachToPageTarget(browser, target, autoAttachedSessionId = null)
   await send("Page.addScriptToEvaluateOnNewDocument", {
     source: startupSource + "\n;\n" + pageSource,
     runImmediately: true,
+  });
+  browser.on("Runtime.consoleAPICalled", (params, message) => {
+    if (message?.sessionId !== sessionId || !isFeatureSettingsOwnerTarget(target)) return;
+    const sample = parseStartupTimingEvent(params);
+    if (sample) log("Startup timing " + JSON.stringify(sample));
   });
   await send("Runtime.enable");
   await send("Page.enable");

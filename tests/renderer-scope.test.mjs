@@ -31,7 +31,7 @@ test("new-document registration also excludes pet notification scripts in native
   let registered;
   // The runtime's own guard is covered above; this exercises the independent
   // pet script at the actual new-document delivery seam.
-  const browser = { send: async (method, params) => { if (method === "Page.addScriptToEvaluateOnNewDocument") registered = params.source; return {}; } };
+  const browser = { on() {}, send: async (method, params) => { if (method === "Page.addScriptToEvaluateOnNewDocument") registered = params.source; return {}; } };
   // Supply an inert runtime so only the separately registered pet script is tested.
   const petOnly = vm.runInNewContext(policy + bootstrap + "\nattachToPageTarget", {
     pageSessions: new Map(), pageTargetsBySessionId: new Map(), buildInjectionSource: () => "",
