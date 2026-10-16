@@ -22,13 +22,13 @@ const STARTUP_MARKUP = `
         <defs>
           <linearGradient id="codex-plus-startup-outer-light" x1="118" y1="64" x2="10" y2="64" gradientUnits="userSpaceOnUse">
             <stop class="codex-plus-pro-startup-gradient-head"/>
-            <stop class="codex-plus-pro-startup-gradient-cyan" offset=".35"/>
-            <stop class="codex-plus-pro-startup-gradient-cyan" offset="1" stop-opacity=".05"/>
+            <stop class="codex-plus-pro-startup-gradient-primary" offset=".35"/>
+            <stop class="codex-plus-pro-startup-gradient-primary" offset="1" stop-opacity=".05"/>
           </linearGradient>
           <linearGradient id="codex-plus-startup-inner-light" x1="107" y1="64" x2="21" y2="64" gradientUnits="userSpaceOnUse">
             <stop class="codex-plus-pro-startup-gradient-head"/>
-            <stop class="codex-plus-pro-startup-gradient-blue" offset=".4"/>
-            <stop class="codex-plus-pro-startup-gradient-blue" offset="1" stop-opacity=".06"/>
+            <stop class="codex-plus-pro-startup-gradient-secondary" offset=".4"/>
+            <stop class="codex-plus-pro-startup-gradient-secondary" offset="1" stop-opacity=".06"/>
           </linearGradient>
         </defs>
         <circle class="codex-plus-pro-startup-ring" cx="64" cy="64" r="54" pathLength="1"/>
@@ -62,10 +62,10 @@ const STARTUP_STYLE = `
     --codex-plus-startup-background:var(--startup-background,#f4f8fd);
     --codex-plus-startup-foreground:var(--color-token-text-primary,#1f3a5f);
     --codex-plus-startup-wash:var(--codex-plus-startup-background);
-    --codex-plus-startup-signal:#286e50;
-    --codex-plus-startup-orbit-cyan:color-mix(in srgb,var(--codex-plus-startup-accent) 18%,#0086ad);
-    --codex-plus-startup-orbit-blue:color-mix(in srgb,var(--codex-plus-startup-accent) 24%,#4265d5);
-    --codex-plus-startup-orbit-ice:#d5fbff;
+    --codex-plus-startup-orbit-primary:color-mix(in srgb,var(--codex-plus-startup-accent) 88%,var(--codex-plus-startup-deep));
+    --codex-plus-startup-orbit-secondary:color-mix(in srgb,var(--codex-plus-startup-highlight) 70%,var(--codex-plus-startup-deep));
+    --codex-plus-startup-orbit-head:color-mix(in srgb,var(--codex-plus-startup-accent) 12%,#fff);
+    --codex-plus-startup-signal:var(--codex-plus-startup-orbit-primary);
     --codex-plus-startup-orbit-glow:.35;
     --codex-plus-startup-wallpaper-opacity:.8;
     --codex-plus-startup-core-size:clamp(88px,12vw,116px);
@@ -76,9 +76,9 @@ const STARTUP_STYLE = `
   }
   :root.electron-dark .codex-plus-pro-startup-splash {
     --codex-plus-startup-wash:#050d14;
-    --codex-plus-startup-signal:#8cdeba;
-    --codex-plus-startup-orbit-cyan:color-mix(in srgb,var(--codex-plus-startup-accent) 18%,#45e4ff);
-    --codex-plus-startup-orbit-blue:color-mix(in srgb,var(--codex-plus-startup-accent) 24%,#839bff);
+    --codex-plus-startup-orbit-primary:color-mix(in srgb,var(--codex-plus-startup-accent) 76%,#fff);
+    --codex-plus-startup-orbit-secondary:color-mix(in srgb,var(--codex-plus-startup-highlight) 82%,#fff);
+    --codex-plus-startup-orbit-head:color-mix(in srgb,var(--codex-plus-startup-accent) 18%,#fff);
     --codex-plus-startup-orbit-glow:.6;
     --codex-plus-startup-wallpaper-opacity:.62;
     color-scheme:dark;
@@ -104,13 +104,13 @@ const STARTUP_STYLE = `
   .codex-plus-pro-startup-tech { position:absolute;inset:0;z-index:2;pointer-events:none }
   .codex-plus-pro-startup-grid {
     position:absolute;inset:0;opacity:.13;
-    background:radial-gradient(circle,color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 60%,var(--codex-plus-startup-foreground)) .65px,transparent .85px) center/36px 36px;
+    background:radial-gradient(circle,color-mix(in srgb,var(--codex-plus-startup-orbit-primary) 60%,var(--codex-plus-startup-foreground)) .65px,transparent .85px) center/36px 36px;
     mask-image:radial-gradient(ellipse at center,transparent 10%,black 45%,transparent 73%);
     animation:codex-plus-startup-grid 2600ms ease both;
   }
   .codex-plus-pro-startup-particles span {
     position:absolute;left:50%;top:50%;font:10px/1.2 Consolas,'Cascadia Code',monospace;
-    color:color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 55%,var(--codex-plus-startup-foreground));opacity:0;white-space:nowrap;
+    color:color-mix(in srgb,var(--codex-plus-startup-orbit-primary) 55%,var(--codex-plus-startup-foreground));opacity:0;white-space:nowrap;
     animation:codex-plus-startup-particle 1300ms var(--delay,0ms) cubic-bezier(.3,.05,.4,1) both;
   }
   .codex-plus-pro-startup-brand { position:relative;z-index:3;width:min(440px,calc(100vw - 44px));height:164px;transform:translateY(-12px) }
@@ -121,41 +121,41 @@ const STARTUP_STYLE = `
   }
   .codex-plus-pro-startup-mark::before {
     content:'';position:absolute;inset:24%;border-radius:50%;
-    background:radial-gradient(circle at 35% 25%,color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 34%,var(--codex-plus-startup-deep)),var(--codex-plus-startup-deep) 75%);
-    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 48%,transparent),0 0 18px color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 18%,transparent),0 0 40px color-mix(in srgb,var(--codex-plus-startup-orbit-blue) 12%,transparent);
+    background:radial-gradient(circle at 35% 25%,color-mix(in srgb,var(--codex-plus-startup-orbit-primary) 34%,var(--codex-plus-startup-deep)),var(--codex-plus-startup-deep) 75%);
+    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--codex-plus-startup-orbit-primary) 48%,transparent),0 0 18px color-mix(in srgb,var(--codex-plus-startup-orbit-primary) 18%,transparent),0 0 40px color-mix(in srgb,var(--codex-plus-startup-orbit-secondary) 12%,transparent);
     animation:codex-plus-startup-core 300ms 1300ms ease both;
   }
   .codex-plus-pro-startup-mark::after {
-    content:'';position:absolute;inset:5%;border:1px solid var(--codex-plus-startup-orbit-cyan);border-radius:50%;opacity:0;
+    content:'';position:absolute;inset:5%;border:1px solid var(--codex-plus-startup-orbit-primary);border-radius:50%;opacity:0;
     animation:codex-plus-startup-pulse 400ms 1600ms cubic-bezier(.2,.65,.35,1) both;
   }
   .codex-plus-pro-startup-geometry { position:absolute;inset:0;width:100%;height:100%;overflow:visible;stroke-width:1;stroke-linecap:round;stroke-linejoin:round }
   .codex-plus-pro-startup-ring {
-    stroke:var(--codex-plus-startup-orbit-cyan);stroke-width:.9;stroke-dasharray:1;opacity:.3;
+    stroke:var(--codex-plus-startup-orbit-primary);stroke-width:.9;stroke-dasharray:1;opacity:.3;
     transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;
     animation:codex-plus-startup-outer-orbit 1500ms 500ms cubic-bezier(.3,.1,.25,1) both;
   }
   .codex-plus-pro-startup-inner-ring {
-    stroke:var(--codex-plus-startup-orbit-blue);stroke-width:.8;stroke-dasharray:1;opacity:.24;
+    stroke:var(--codex-plus-startup-orbit-secondary);stroke-width:.8;stroke-dasharray:1;opacity:.24;
     transform:rotate(90deg);transform-box:fill-box;transform-origin:center;
     animation:codex-plus-startup-inner-orbit 1350ms 650ms cubic-bezier(.3,.1,.25,1) both;
   }
-  .codex-plus-pro-startup-gradient-head { stop-color:var(--codex-plus-startup-orbit-ice) }
-  .codex-plus-pro-startup-gradient-cyan { stop-color:var(--codex-plus-startup-orbit-cyan) }
-  .codex-plus-pro-startup-gradient-blue { stop-color:var(--codex-plus-startup-orbit-blue) }
+  .codex-plus-pro-startup-gradient-head { stop-color:var(--codex-plus-startup-orbit-head) }
+  .codex-plus-pro-startup-gradient-primary { stop-color:var(--codex-plus-startup-orbit-primary) }
+  .codex-plus-pro-startup-gradient-secondary { stop-color:var(--codex-plus-startup-orbit-secondary) }
   .codex-plus-pro-startup-orbit-reveal { opacity:1;animation:codex-plus-startup-detail 500ms 1500ms ease-out both }
   .codex-plus-pro-startup-orbit-outer, .codex-plus-pro-startup-orbit-inner { transform-box:view-box;transform-origin:50% 50% }
-  .codex-plus-pro-startup-orbit-outer { transform:rotate(-90deg);animation:codex-plus-startup-scan-outer 4800ms linear infinite }
-  .codex-plus-pro-startup-orbit-inner { transform:rotate(90deg);animation:codex-plus-startup-scan-inner 3600ms linear infinite }
+  .codex-plus-pro-startup-orbit-outer { --codex-plus-startup-orbit-color:var(--codex-plus-startup-orbit-primary);transform:rotate(-90deg);animation:codex-plus-startup-scan-outer 4800ms linear infinite }
+  .codex-plus-pro-startup-orbit-inner { --codex-plus-startup-orbit-color:var(--codex-plus-startup-orbit-secondary);transform:rotate(90deg);animation:codex-plus-startup-scan-inner 3600ms linear infinite }
   .codex-plus-pro-startup-sweep-outer {
     stroke:url(#codex-plus-startup-outer-light);stroke-width:2.2;stroke-dasharray:.25 .07 .055 .625;
-    filter:drop-shadow(0 0 3px color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) calc(var(--codex-plus-startup-orbit-glow) * 100%),transparent));
+    filter:drop-shadow(0 0 3px color-mix(in srgb,var(--codex-plus-startup-orbit-primary) calc(var(--codex-plus-startup-orbit-glow) * 100%),transparent));
   }
   .codex-plus-pro-startup-sweep-inner {
     stroke:url(#codex-plus-startup-inner-light);stroke-width:1.7;stroke-dasharray:.2 .06 .045 .695;
-    filter:drop-shadow(0 0 2px color-mix(in srgb,var(--codex-plus-startup-orbit-blue) calc(var(--codex-plus-startup-orbit-glow) * 100%),transparent));
+    filter:drop-shadow(0 0 2px color-mix(in srgb,var(--codex-plus-startup-orbit-secondary) calc(var(--codex-plus-startup-orbit-glow) * 100%),transparent));
   }
-  .codex-plus-pro-startup-orbit-head { fill:var(--codex-plus-startup-orbit-ice);filter:drop-shadow(0 0 3px var(--codex-plus-startup-orbit-cyan)) }
+  .codex-plus-pro-startup-orbit-head { fill:var(--codex-plus-startup-orbit-head);filter:drop-shadow(0 0 3px var(--codex-plus-startup-orbit-color)) }
   .codex-plus-pro-startup-core-logo {
     position:absolute;inset:31%;background:var(--codex-pokedex-ball-logo,none) center/contain no-repeat;
     animation:codex-plus-startup-core 300ms 1300ms ease both;

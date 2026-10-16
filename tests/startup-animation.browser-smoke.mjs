@@ -15,6 +15,9 @@ const css = await fs.readFile(new URL("../source/theme.css", import.meta.url), "
 const injector = await fs.readFile(new URL("../source/injector.mjs", import.meta.url), "utf8");
 const accentOptions = vm.runInNewContext("(" + injector.match(/const ACCENT_OPTIONS = (\{[\s\S]*?\n\});/)[1] + ")");
 const packs = JSON.parse(await fs.readFile(new URL("../source/theme-packs.json", import.meta.url), "utf8")).accents;
+// Exercise a cached wallpaper-derived palette through the real startup path.
+const adaptivePalette = { color: "#8956d6", dark: "#493073", highlight: "#dd83cf" };
+const previewPacks = { ...packs, adaptive: packs.aria };
 const files = {};
 for (const name of new Set(Object.values(packs).flatMap(pack => [pack.wallpaper, pack.logo]))) {
   const bytes = await fs.readFile(new URL("../source/assets/" + name, import.meta.url));
@@ -44,14 +47,14 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
   @media(max-width:640px){main{margin:16px auto;padding:0 12px}header{align-items:start;flex-direction:column}iframe{aspect-ratio:4/5}nav{grid-template-columns:repeat(2,1fr)}nav button:last-child{grid-column:1/-1}}
 </style>
 <main><header><div><h1>Codex Plus Pro</h1><p>首次开场 6.4 秒；后续按实际启动耗时调整，等待期间保持动效。</p></div>
-<div class="options"><label>主题 <select id="accent"><option value="aria">Aria 蓝</option><option value="forest">森林绿</option><option value="pokedex">图鉴红</option><option value="lagoon">湖泊青</option><option value="graphite">石墨灰</option></select></label>
+<div class="options"><label>主题 <select id="accent"><option value="aria">Aria 蓝</option><option value="forest">森林绿</option><option value="pokedex">图鉴红</option><option value="lagoon">湖泊青</option><option value="graphite">石墨灰</option><option value="adaptive">自适应（紫色示例）</option></select></label>
 <label>外观 <select id="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label></div></header>
 <iframe id="stage" title="启动动画预览"></iframe>
 <nav aria-label="关键帧"><button data-time="250">深空初始化<small></small></button><button data-time="900">几何成形<small></small></button><button data-time="1650">核心激活<small></small></button><button data-time="2300">文字落地<small></small></button><button data-time="3000">最终定格<small></small></button></nav>
 <div class="scrub"><input id="timeline" type="range" min="0" max="6400" step="10" value="0" aria-label="动画时间"><output id="time">0.00s / 6.40s</output></div>
 <div class="tools"><button id="replay">重新播放</button><button id="complete">模拟加载完成</button><label>启动参考 <select id="pace"><option value="0">首次启动（6.4 秒）</option><option value="8000">最近耗时 8 秒</option><option value="14000">最近耗时 14 秒</option></select></label><label>加载 <select id="load"><option value="manual">保持加载（持续动效）</option><option value="fast">快速就绪</option><option value="normal">正常就绪</option></select></label><p>点击关键帧或拖动时间轴，可暂停查看细节。</p></div></main>
 <script>
-  const runtime=${json(runtime)},packs=${json(packs)},files=${json(files)},profiles=${json(profiles)},timingKey=${json(timingKey)};
+  const runtime=${json(runtime)},packs=${json(previewPacks)},files=${json(files)},profiles=${json(profiles)},timingKey=${json(timingKey)},adaptivePalette=${json(adaptivePalette)};
   const stage=document.getElementById('stage'),timeline=document.getElementById('timeline'),output=document.getElementById('time');
   let replayFrame=null,playing=false,started=0,introMs=6400;
   const fromNominal=ms=>ms<=2800?ms*(introMs-400)/2800:introMs-400+ms-2800;
@@ -67,6 +70,7 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
       'const startedAt=performance.now(),root=document.documentElement;root.style.setProperty("--codex-pokedex-wallpaper",'+JSON.stringify('url("'+files[pack.wallpaper]+'")')+');root.style.setProperty("--codex-pokedex-ball-logo",'+JSON.stringify('url("'+files[pack.logo]+'")')+');'+
       'document.addEventListener("animationend",event=>{if(window.__startupPreview?.scrubbing)event.stopImmediatePropagation()},true);'+
       'window.__startupPreviewStorage=new Map([["codex-plus-pro-settings-v1",'+JSON.stringify(JSON.stringify({theme:true,accent}))+'],['+JSON.stringify(timingKey)+','+JSON.stringify(JSON.stringify(profile.history))+']]);'+
+      'window.__startupPreviewStorage.set("codex-plus-pro-adaptive-theme-v1",'+JSON.stringify(JSON.stringify(adaptivePalette))+');'+
       'new Function("location","localStorage",'+JSON.stringify(runtime)+')(new URL("app://-/index.html"),{getItem:key=>window.__startupPreviewStorage.get(key),setItem:(key,value)=>window.__startupPreviewStorage.set(key,value)});'+
       'window.__startupPreview={introMs:'+introMs+',events:[],compositionAt:null,scrubbing:false,seek:ms=>{window.__startupPreview.scrubbing=true;document.querySelector("[data-codex-plus-startup-splash]")?.removeAttribute("data-waiting");document.getAnimations().forEach(a=>{a.pause();a.currentTime=ms})},complete:()=>{const state=window.__startupPreview;if(state.scrubbing){state.seek(state.introMs);state.scrubbing=false;document.getAnimations().forEach(a=>{a.currentTime=Math.min(state.introMs,a.effect.getComputedTiming().endTime-1);a.play()})}document.getElementById("root").innerHTML="<button>工作区已就绪</button>"},loading:()=>{document.getElementById("root").innerHTML="<div class=startup-loader><div class=startup-loader__logo>原始启动画面</div></div>"}};'+
       'const splash=document.querySelector("[data-codex-plus-startup-splash]"),state=window.__startupPreview;'+
@@ -146,7 +150,8 @@ try {
         return (Math.max(backgroundLight, foreground) + .05) / (Math.min(backgroundLight, foreground) + .05);
       }),
       overlay: getComputedStyle(splash, '::after').backgroundImage,
-      orbitColors: ['gradient-cyan','gradient-blue'].map(name=>rgb(getComputedStyle(splash.querySelector('.codex-plus-pro-startup-'+name)).stopColor)),
+      orbitColors: ['outer','inner'].map(name=>rgb(getComputedStyle(splash.querySelector('#codex-plus-startup-'+name+'-light stop[offset]')).stopColor)),
+      signal: rgb(getComputedStyle(splash.querySelector('.codex-plus-pro-startup-caption'), '::before').backgroundColor),
       wallpaper: getComputedStyle(splash.querySelector('.codex-plus-pro-startup-wallpaper')).backgroundImage,
       motion: splash.getAnimations({subtree:true}).filter(a => a instanceof CSSAnimation && a.animationName !== 'codex-plus-startup-wait').map(a => ({name:a.animationName, delay:a.effect.getTiming().delay, duration:a.effect.getTiming().duration})),
     };
@@ -212,27 +217,50 @@ try {
     assert.ok(Math.abs(sample.outer.radius - 54*116/128) < .6 && Math.abs(sample.inner.radius - 43*116/128) < .6, 'the light heads stay on concentric tracks');
   }
 
-  for (const accent of Object.keys(packs)) {
+  const hue = rgb => {
+    const [r,g,b] = rgb.map(c=>c/255), max = Math.max(r,g,b), min = Math.min(r,g,b), delta = max-min;
+    if (delta < .05) return null;
+    const sector = max===r ? ((g-b)/delta)%6 : max===g ? (b-r)/delta+2 : (r-g)/delta+4;
+    return (sector*60+360)%360;
+  };
+  const assertThemeColors = (appearance, palette, label) => {
+    const expected = [palette.color, palette.highlight].map(hex=>[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)));
+    appearance.orbitColors.forEach((rgb, i) => {
+      const target = hue(expected[i]), actual = hue(rgb);
+      if (target === null) assert.ok(Math.max(...rgb)-Math.min(...rgb) < 20, `${label}: a neutral theme retains a neutral outer ring`);
+      else {
+        assert.notEqual(actual, null, `${label}: the scan retains its theme chroma`);
+        const difference = Math.abs(target-actual);
+        assert.ok(Math.min(difference,360-difference) < 20, `${label}: ${i===0?'outer':'inner'} scan follows its theme color (hue ${actual} vs ${target})`);
+      }
+    });
+    assert.deepEqual(appearance.signal, appearance.orbitColors[0], `${label}: loading feedback shares the theme primary color`);
+  };
+  for (const accent of Object.keys(previewPacks)) {
     await page.locator("#accent").selectOption(accent);
     await ready();
     await seek(3200);
     assert.equal(await frame().evaluate(() => document.documentElement.getAttribute('data-codex-plus-accent')), accent);
     const colors = await frame().evaluate(() => { const s = getComputedStyle(document.documentElement); return ['accent','accent-dark','highlight'].map(key => s.getPropertyValue('--codex-plus-'+key).trim()); });
-    assert.deepEqual(colors, [accentOptions[accent].color, accentOptions[accent].dark, accentOptions[accent].highlight], "first paint must use the same palette as the settings renderer");
+    const palette = accent === 'adaptive' ? adaptivePalette : accentOptions[accent];
+    assert.deepEqual(colors, [palette.color, palette.dark, palette.highlight], "first paint must use the same palette as the settings renderer");
     const asset = await frame().evaluate(() => getComputedStyle(document.querySelector('.codex-plus-pro-startup-wallpaper')).backgroundImage);
-    assert.ok(asset.includes(files[packs[accent].wallpaper].slice(0, 70)), "each theme retains its own wallpaper");
+    assert.ok(asset.includes(files[previewPacks[accent].wallpaper].slice(0, 70)), "each theme retains its own wallpaper");
     const dark = await appearance();
+    assertThemeColors(dark, palette, `${accent}/dark`);
     if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, `startup-${accent}-dark.png`) });
     await page.locator("#mode").selectOption("light");
     await ready();
     await seek(3200);
     const light = await appearance();
+    assertThemeColors(light, palette, `${accent}/light`);
     assert.notDeepEqual(light.background, dark.background, `${accent}: light and dark startup backgrounds must visibly differ`);
     assert.ok(light.backgroundLight > .8 && dark.backgroundLight < .05, `${accent}: each mode must follow the workspace brightness`);
     assert.ok(light.textLight < .15 && dark.textLight > .6, `${accent}: light mode uses dark lettering and dark mode uses light lettering`);
     assert.ok([...light.textContrast, ...dark.textContrast].every(value => value >= 4.5), `${accent}: title and supporting text must contrast with their base surface`);
     assert.notEqual(light.overlay, dark.overlay, `${accent}: the wallpaper wash must also follow the mode`);
     assert.notDeepEqual(light.orbitColors,dark.orbitColors, `${accent}: light mode uses deeper scan colors and dark mode uses luminous scan colors`);
+    assert.ok(dark.orbitColors[0].every((channel,i)=>channel>light.orbitColors[0][i]), `${accent}: the dark-mode primary scan must be brighter`);
     assert.equal(light.wallpaper, dark.wallpaper, "appearance changes retain the selected theme artwork");
     assert.deepEqual(light.motion, dark.motion, "appearance changes share one motion sequence");
     if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, `startup-${accent}-light.png`) });
@@ -427,7 +455,7 @@ try {
   await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:"detached" });
   assert.equal(await frame().evaluate(() => document.documentElement.getAttribute('data-codex-plus-startup-state')), "ready");
   assert.deepEqual(errors, []);
-  console.log("Startup visual checks passed: gradient scans on both rings, opposing concentric motion, light/dark scan palettes, five keyframes, five themes, learned pacing, actual readiness records, full playback, continuous loading, visibility pause, final hold, fade recovery and reduced motion.");
+  console.log("Startup visual checks passed: theme-colored gradient scans on both rings, opposing concentric motion, light/dark scan palettes, five keyframes, five themes plus a cached adaptive palette, learned pacing, actual readiness records, full playback, continuous loading, visibility pause, final hold, fade recovery and reduced motion.");
   console.log(JSON.stringify(timings));
 } finally {
   await browser.close();
