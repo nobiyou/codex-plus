@@ -276,7 +276,7 @@ test("reduced motion shows the final state and adds no artificial startup delay"
     const f = fixture({ reduced });
     f.run();
     if (!reduced) {
-      assert.equal(f.timers.size, 1);
+      f.advance(2800);
       f.reduceMotion();
     }
     assert.equal(f.timers.size, 0);
@@ -325,10 +325,10 @@ test("startup coverage survives document load and ends with painted application 
   assert.equal(f.styles.length, 1, "later runtime refresh must not replay startup");
 });
 
-test("slow startup adds quiet status feedback without replaying the brand", () => {
+test("slow startup enters continuous loading as soon as the intro finishes", () => {
   const f = fixture();
   f.run();
-  f.advance(5999);
+  f.advance(3199);
   assert.equal(f.splashes[0].getAttribute("data-waiting"), undefined);
   f.advance(1);
   assert.equal(f.splashes[0].getAttribute("data-waiting"), "true");
@@ -336,6 +336,45 @@ test("slow startup adds quiet status feedback without replaying the brand", () =
   assert.equal(f.splashes.length, 1);
   assert.equal(f.splashes[0].removed, false);
   assert.equal(f.timers.size, 0, "long startup requires no JavaScript polling");
+});
+
+test("a ready workspace leaves after the intro without entering the loading loop", () => {
+  const f = fixture();
+  f.run();
+  f.advance(1000);
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate();
+  f.advance(2200);
+  f.paint(); f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-waiting"), undefined);
+  assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+  f.advance(180);
+  assert.equal(f.splashes[0].removed, true);
+});
+
+test("a loader returning during reveal starts continuous feedback immediately", () => {
+  const f = fixture();
+  f.run();
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate();
+  f.advance(3200);
+  f.paint(); f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+  f.reactLoader.isConnected = true;
+  f.mutate();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), undefined);
+  assert.equal(f.splashes[0].getAttribute("data-waiting"), "true");
+  f.advance(60000);
+  assert.equal(f.splashes[0].removed, false);
+  f.reactLoader.isConnected = false;
+  f.mutate();
+  f.paint(); f.paint();
+  f.advance(180);
+  assert.equal(f.splashes[0].removed, true);
+  assert.equal(f.frames.size, 0);
+  assert.equal(f.timers.size, 0);
 });
 
 test("startup uses saved theme assets, custom uploads, and dark/reduced-motion CSS", () => {

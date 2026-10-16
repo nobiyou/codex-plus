@@ -1,7 +1,6 @@
 // HTML and React both own loading phases. Keep the cover outside their root.
 const STARTUP_HOLD_MS = 400;
 const STARTUP_EXIT_MS = 180;
-const STARTUP_WAIT_MS = 6000;
 const STARTUP_MARKUP = `
   <div class="codex-plus-pro-startup-wallpaper" aria-hidden="true"></div>
   <div class="codex-plus-pro-startup-tech" aria-hidden="true">
@@ -20,6 +19,7 @@ const STARTUP_MARKUP = `
       <svg class="codex-plus-pro-startup-geometry" viewBox="0 0 128 128" fill="none">
         <circle class="codex-plus-pro-startup-ring" cx="64" cy="64" r="54" pathLength="1"/>
         <circle class="codex-plus-pro-startup-inner-ring" cx="64" cy="64" r="43" pathLength="1"/>
+        <circle class="codex-plus-pro-startup-waiting-orbit" cx="64" cy="64" r="54" pathLength="1"/>
       </svg>
       <span class="codex-plus-pro-startup-core-logo"></span>
     </div>
@@ -28,7 +28,7 @@ const STARTUP_MARKUP = `
       <div class="codex-plus-pro-startup-edition">Plus Pro</div>
     </div>
   </div>
-  <div class="codex-plus-pro-startup-caption">正在准备工作区</div>`;
+  <div class="codex-plus-pro-startup-caption">正在加载工作区</div>`;
 const STARTUP_STYLE = `
   :root[data-codex-plus-startup-state=loading] .startup-loader__logo,
   :root[data-codex-plus-startup-state=loading] .codex-plus-pro-settings-button { visibility:hidden!important }
@@ -110,6 +110,10 @@ const STARTUP_STYLE = `
     transform:rotate(90deg);transform-box:fill-box;transform-origin:center;
     animation:codex-plus-startup-inner-orbit 1350ms 650ms cubic-bezier(.3,.1,.25,1) both;
   }
+  .codex-plus-pro-startup-waiting-orbit {
+    stroke:color-mix(in srgb,var(--codex-plus-startup-accent) 70%,var(--codex-plus-startup-foreground));stroke-width:1.8;stroke-dasharray:.18 .82;opacity:0;
+    transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;
+  }
   .codex-plus-pro-startup-core-logo {
     position:absolute;inset:31%;background:var(--codex-pokedex-ball-logo,none) center/contain no-repeat;
     animation:codex-plus-startup-core 300ms 1300ms ease both;
@@ -127,6 +131,9 @@ const STARTUP_STYLE = `
   }
   .codex-plus-pro-startup-caption::before { content:'';display:inline-block;width:4px;height:4px;margin:0 10px 2px 0;border-radius:50%;background:var(--codex-plus-startup-signal);opacity:.65 }
   .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-caption::before { animation:codex-plus-startup-wait 1600ms ease-in-out infinite }
+  .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-waiting-orbit { opacity:.9;animation:codex-plus-startup-wait-orbit 4800ms linear infinite }
+  .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-inner-ring { animation:codex-plus-startup-wait-ring 3200ms ease-in-out infinite }
+  .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-wallpaper { animation:codex-plus-startup-wait-wallpaper 8000ms ease-in-out infinite }
   @keyframes codex-plus-startup-particle {
     0% { opacity:0;transform:translate(var(--x),var(--y)) }
     18% { opacity:.5 }
@@ -156,6 +163,9 @@ const STARTUP_STYLE = `
   @keyframes codex-plus-startup-wallpaper { from { opacity:0;transform:scale(1.045) } to { opacity:var(--codex-plus-startup-wallpaper-opacity);transform:scale(1) } }
   @keyframes codex-plus-startup-grid { from { opacity:.25 } to { opacity:.13 } }
   @keyframes codex-plus-startup-wait { 0%,100% { opacity:.35 } 50% { opacity:.85 } }
+  @keyframes codex-plus-startup-wait-orbit { from { transform:rotate(-90deg) } to { transform:rotate(270deg) } }
+  @keyframes codex-plus-startup-wait-ring { 0%,100% { opacity:.42 } 50% { opacity:.7 } }
+  @keyframes codex-plus-startup-wait-wallpaper { 0%,100% { transform:scale(1) } 50% { transform:scale(1.025) } }
   @media (max-width:640px) { .codex-plus-pro-startup-wallpaper { background-position:68% center } }
   @media (prefers-reduced-motion:reduce) {
     .codex-plus-pro-startup-splash { transition:none!important }
@@ -194,7 +204,6 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
     let playbackFrame = null;
     let introTimer = null;
     let exitTimer = null;
-    let waitTimer = null;
     let motionEnded = false;
     let holdRemaining = ${STARTUP_HOLD_MS};
     let holdStartedAt = 0;
@@ -225,8 +234,6 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       introTimer = null;
       if (exitTimer !== null) window.clearTimeout(exitTimer);
       exitTimer = null;
-      if (waitTimer !== null) window.clearTimeout(waitTimer);
-      waitTimer = null;
       motionPreference?.removeEventListener?.("change", reduceMotion);
       window.removeEventListener("pagehide", cleanup);
       document.removeEventListener("DOMContentLoaded", sync);
@@ -242,8 +249,6 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       introComplete = true;
       if (introTimer !== null) window.clearTimeout(introTimer);
       introTimer = null;
-      if (waitTimer !== null) window.clearTimeout(waitTimer);
-      waitTimer = null;
       if (exitTimer !== null && contentReady()) { cleanup(); return; }
       sync();
     };
@@ -299,12 +304,6 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
           if (finished || document.hidden) return;
           splash.setAttribute("data-playback", "running");
           holdFinalFrame();
-          if (!introComplete && waitTimer === null) {
-            waitTimer = window.setTimeout(() => {
-              waitTimer = null;
-              splash.setAttribute("data-waiting", "true");
-            }, ${STARTUP_WAIT_MS});
-          }
           sync();
         });
       });
@@ -366,7 +365,11 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       }
       if (document.body && splash.parentNode !== document.body) document.body.appendChild(splash);
       if (!syncPlayback()) { cancelReveal(); return; }
-      if (!contentReady()) { cancelReveal(); return; }
+      if (!contentReady()) {
+        if (introComplete) splash.setAttribute("data-waiting", "true");
+        cancelReveal();
+        return;
+      }
       if (exitTimer !== null) return;
       // Check across a painted frame so a transient empty/loading handoff cannot
       // expose the next React fallback. The intro deadline never ends a slow load.
