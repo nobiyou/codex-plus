@@ -59,12 +59,13 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
       'Promise.all(splash.getAnimations({subtree:true}).map(a=>a.finished)).then(()=>{state.compositionAt=performance.now()-startedAt}).catch(()=>{});'+
       'new MutationObserver(()=>{const phase=splash.isConnected?splash.getAttribute("data-phase")||"loading":"ready";if(state.events.at(-1)?.phase===phase)return;const animations=splash.getAnimations({subtree:true}).filter(a=>a instanceof CSSAnimation);state.events.push({phase,at:performance.now()-startedAt,wallpaper:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wallpaper")).opacity,wordmark:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wordmark")).opacity,moving:animations.some(a=>a.playState==="running"),rates:[...new Set(animations.map(a=>a.playbackRate))]})}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-phase"]});'+
       (document.getElementById('load').value==='manual'?'':'setTimeout(state.complete,'+(document.getElementById('load').value==='fast'?100:1000)+');');
-    stage.srcdoc='<!doctype html><html lang="zh-CN" data-theme="'+mode+'"><meta charset="utf-8"><style>body{margin:0;background:#101921;color:#e3f0ea;font-family:system-ui}#root{min-height:100vh;display:grid;place-items:center}.startup-loader__logo{font-size:36px}button{padding:12px 20px;border:1px solid #587467;border-radius:8px;background:#192e26;color:#def5e8}</style><body><div id="root"><div class="startup-loader"><div class="startup-loader__logo">原始启动画面</div></div></div><script>'+init+'<'+ '/script>';
+    stage.srcdoc='<!doctype html><html lang="zh-CN" data-theme="'+mode+'"><meta charset="utf-8"><style>body{margin:0;background:#101921;color:#e3f0ea;font-family:system-ui}html[data-theme=light] body{background:#f4f8fd;color:#1f3a5f}#root{min-height:100vh;display:grid;place-items:center}.startup-loader__logo{font-size:36px}button{padding:12px 20px;border:1px solid #587467;border-radius:8px;background:#192e26;color:#def5e8}html[data-theme=light] button{background:#eaf2fb;border-color:#b4cbe0;color:#1f3a5f}</style><body><div id="root"><div class="startup-loader"><div class="startup-loader__logo">原始启动画面</div></div></div><script>'+init+'<'+ '/script>';
   }
   stage.addEventListener('load',()=>{started=performance.now();playing=true;replayFrame=requestAnimationFrame(tick)});
   timeline.addEventListener('input',()=>seek(Number(timeline.value)));
   document.querySelectorAll('[data-time]').forEach(button=>button.addEventListener('click',()=>seek(Number(button.dataset.time))));
-  document.getElementById('accent').addEventListener('change',mount);document.getElementById('mode').addEventListener('change',mount);
+  document.getElementById('accent').addEventListener('change',mount);
+  document.getElementById('mode').addEventListener('change',()=>stage.contentDocument?.documentElement.setAttribute('data-theme',document.getElementById('mode').value));
   document.getElementById('load').addEventListener('change',mount);
   document.getElementById('replay').addEventListener('click',mount);document.getElementById('complete').addEventListener('click',()=>{stage.contentWindow.__startupPreview?.complete()});
   mount();
@@ -104,6 +105,28 @@ try {
       };
     });
   };
+  const appearance = () => frame().evaluate(() => {
+    const splash = document.querySelector('[data-codex-plus-startup-splash]');
+    const styles = getComputedStyle(splash);
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 1;
+    const ctx = canvas.getContext('2d');
+    const rgb = color => { ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1); return [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3); };
+    const luminance = color => rgb(color).map(c => { const v = c / 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }).reduce((sum, c, i) => sum + c * [.2126, .7152, .0722][i], 0);
+    const background = styles.backgroundColor;
+    const text = getComputedStyle(splash.querySelector('.codex-plus-pro-startup-wordmark')).color;
+    const backgroundLight = luminance(background);
+    return {
+      background: rgb(background), text: rgb(text), backgroundLight, textLight: luminance(text),
+      textContrast: ['title', 'edition', 'caption'].map(name => {
+        const foreground = luminance(getComputedStyle(splash.querySelector('.codex-plus-pro-startup-' + name)).color);
+        return (Math.max(backgroundLight, foreground) + .05) / (Math.min(backgroundLight, foreground) + .05);
+      }),
+      overlay: getComputedStyle(splash, '::after').backgroundImage,
+      wallpaper: getComputedStyle(splash.querySelector('.codex-plus-pro-startup-wallpaper')).backgroundImage,
+      motion: splash.getAnimations({subtree:true}).filter(a => a instanceof CSSAnimation && a.animationName !== 'codex-plus-startup-wait').map(a => ({name:a.animationName, delay:a.effect.getTiming().delay, duration:a.effect.getTiming().duration})),
+    };
+  });
   await ready();
   const samples = [];
   for (const [i, ms] of [250, 900, 1650, 2300, 3000].entries()) {
@@ -122,7 +145,7 @@ try {
   assert.ok(samples[3].wordmark > 0 && samples[3].wordmark < 1);
   assert.equal(samples[3].wallpaper, 0, "the background stays quiet until the wordmark has appeared");
   assert.equal(samples[4].wordmark, 1);
-  assert.equal(samples[4].wallpaper, .8, "the final composition must settle before the intro deadline");
+  assert.equal(samples[4].wallpaper, .62, "the final composition must settle before the intro deadline");
   assert.equal(samples[4].pulse, 0);
   assert.equal(samples[4].particles, 0);
   assert.ok(samples[4].center < samples[1].center - 90, "the core makes room for the right-hand wordmark");
@@ -137,6 +160,22 @@ try {
     assert.deepEqual(colors, [accentOptions[accent].color, accentOptions[accent].dark, accentOptions[accent].highlight], "first paint must use the same palette as the settings renderer");
     const asset = await frame().evaluate(() => getComputedStyle(document.querySelector('.codex-plus-pro-startup-wallpaper')).backgroundImage);
     assert.ok(asset.includes(files[packs[accent].wallpaper].slice(0, 70)), "each theme retains its own wallpaper");
+    const dark = await appearance();
+    if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, `startup-${accent}-dark.png`) });
+    await page.locator("#mode").selectOption("light");
+    await ready();
+    await seek(3200);
+    const light = await appearance();
+    assert.notDeepEqual(light.background, dark.background, `${accent}: light and dark startup backgrounds must visibly differ`);
+    assert.ok(light.backgroundLight > .8 && dark.backgroundLight < .05, `${accent}: each mode must follow the workspace brightness`);
+    assert.ok(light.textLight < .15 && dark.textLight > .6, `${accent}: light mode uses dark lettering and dark mode uses light lettering`);
+    assert.ok([...light.textContrast, ...dark.textContrast].every(value => value >= 4.5), `${accent}: title and supporting text must contrast with their base surface`);
+    assert.notEqual(light.overlay, dark.overlay, `${accent}: the wallpaper wash must also follow the mode`);
+    assert.equal(light.wallpaper, dark.wallpaper, "appearance changes retain the selected theme artwork");
+    assert.deepEqual(light.motion, dark.motion, "appearance changes share one motion sequence");
+    if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, `startup-${accent}-light.png`) });
+    await page.locator("#mode").selectOption("dark");
+    await ready();
   }
 
   await page.locator("#mode").selectOption("light");
@@ -193,7 +232,7 @@ try {
   await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:"detached" });
   assert.equal(await frame().evaluate(() => document.documentElement.getAttribute('data-codex-plus-startup-state')), "ready");
   assert.deepEqual(errors, []);
-  console.log("Startup visual checks passed: five keyframes/themes, desktop light mode, real fast/normal timing, final hold, slow feedback, fade recovery and reduced motion.");
+  console.log("Startup visual checks passed: five keyframes, light/dark color and contrast checks for five themes, shared motion, real fast/normal timing, final hold, slow feedback, fade recovery and reduced motion.");
   console.log(JSON.stringify(timings));
 } finally {
   await browser.close();
