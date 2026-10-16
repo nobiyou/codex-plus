@@ -35,13 +35,13 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
   .scrub{display:flex;gap:16px;align-items:center;margin:20px 0}input[type=range]{flex:1;accent-color:#8cdeba}output{font:12px Consolas,monospace;white-space:nowrap;color:#a4bcb1}
   @media(max-width:640px){main{margin:16px auto;padding:0 12px}header{align-items:start;flex-direction:column}iframe{aspect-ratio:4/5}nav{grid-template-columns:repeat(2,1fr)}nav button:last-child{grid-column:1/-1}}
 </style>
-<main><header><div><h1>Codex Plus Pro</h1><p>启动动画 · 五个关键帧，3.2 秒完成；加载较慢时停留最终画面。</p></div>
+<main><header><div><h1>Codex Plus Pro</h1><p>完整动画 3.2 秒，快速就绪时加速播放；最终定格后柔和进入工作区。</p></div>
 <div class="options"><label>主题 <select id="accent"><option value="aria">Aria 蓝</option><option value="forest">森林绿</option><option value="pokedex">图鉴红</option><option value="lagoon">湖泊青</option><option value="graphite">石墨灰</option></select></label>
 <label>外观 <select id="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label></div></header>
 <iframe id="stage" title="启动动画预览"></iframe>
 <nav aria-label="关键帧"><button data-time="250">深空初始化<small>0.0–0.5s</small></button><button data-time="900">几何成形<small>0.5–1.3s</small></button><button data-time="1650">核心激活<small>1.3–2.0s</small></button><button data-time="2300">文字落地<small>2.0–2.6s</small></button><button data-time="3000">最终定格<small>2.6–3.2s</small></button></nav>
 <div class="scrub"><input id="timeline" type="range" min="0" max="3200" step="10" value="0" aria-label="动画时间"><output id="time">0.00s / 3.20s</output></div>
-<div class="tools"><button id="replay">重新播放</button><button id="complete">模拟加载完成</button><p>点击关键帧或拖动时间轴，可暂停查看细节。</p></div></main>
+<div class="tools"><button id="replay">重新播放</button><button id="complete">模拟加载完成</button><label>加载 <select id="load"><option value="manual">保持加载</option><option value="fast">快速就绪</option><option value="normal">正常就绪</option></select></label><p>点击关键帧或拖动时间轴，可暂停查看细节。</p></div></main>
 <script>
   const runtime=${json(runtime)},packs=${json(packs)},files=${json(files)};
   const stage=document.getElementById('stage'),timeline=document.getElementById('timeline'),output=document.getElementById('time');
@@ -52,15 +52,20 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
   function mount(){
     playing=false;cancelAnimationFrame(replayFrame);meter(0);
     const accent=document.getElementById('accent').value,mode=document.getElementById('mode').value,pack=packs[accent];
-    const init='const root=document.documentElement;root.style.setProperty("--codex-pokedex-wallpaper",'+JSON.stringify('url("'+files[pack.wallpaper]+'")')+');root.style.setProperty("--codex-pokedex-ball-logo",'+JSON.stringify('url("'+files[pack.logo]+'")')+');'+
+    const init='const startedAt=performance.now(),root=document.documentElement;root.style.setProperty("--codex-pokedex-wallpaper",'+JSON.stringify('url("'+files[pack.wallpaper]+'")')+');root.style.setProperty("--codex-pokedex-ball-logo",'+JSON.stringify('url("'+files[pack.logo]+'")')+');'+
       'new Function("location","localStorage",'+JSON.stringify(runtime)+')(new URL("app://-/index.html"),{getItem:key=>key==="codex-plus-pro-settings-v1"?'+JSON.stringify(JSON.stringify({theme:true,accent}))+':null});'+
-      'window.__startupPreview={seek:ms=>document.getAnimations().forEach(a=>{a.pause();a.currentTime=ms}),complete:()=>{document.getElementById("root").innerHTML="<button>工作区已就绪</button>"}};';
+      'window.__startupPreview={events:[],compositionAt:null,seek:ms=>document.getAnimations().forEach(a=>{a.pause();a.currentTime=ms}),complete:()=>{document.getElementById("root").innerHTML="<button>工作区已就绪</button>"},loading:()=>{document.getElementById("root").innerHTML="<div class=startup-loader><div class=startup-loader__logo>原始启动画面</div></div>"}};'+
+      'const splash=document.querySelector("[data-codex-plus-startup-splash]"),state=window.__startupPreview;'+
+      'Promise.all(splash.getAnimations({subtree:true}).map(a=>a.finished)).then(()=>{state.compositionAt=performance.now()-startedAt}).catch(()=>{});'+
+      'new MutationObserver(()=>{const phase=splash.isConnected?splash.getAttribute("data-phase")||"loading":"ready";if(state.events.at(-1)?.phase===phase)return;const animations=splash.getAnimations({subtree:true}).filter(a=>a instanceof CSSAnimation);state.events.push({phase,at:performance.now()-startedAt,wallpaper:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wallpaper")).opacity,wordmark:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wordmark")).opacity,moving:animations.some(a=>a.playState==="running"),rates:[...new Set(animations.map(a=>a.playbackRate))]})}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-phase"]});'+
+      (document.getElementById('load').value==='manual'?'':'setTimeout(state.complete,'+(document.getElementById('load').value==='fast'?100:1000)+');');
     stage.srcdoc='<!doctype html><html lang="zh-CN" data-theme="'+mode+'"><meta charset="utf-8"><style>body{margin:0;background:#101921;color:#e3f0ea;font-family:system-ui}#root{min-height:100vh;display:grid;place-items:center}.startup-loader__logo{font-size:36px}button{padding:12px 20px;border:1px solid #587467;border-radius:8px;background:#192e26;color:#def5e8}</style><body><div id="root"><div class="startup-loader"><div class="startup-loader__logo">原始启动画面</div></div></div><script>'+init+'<'+ '/script>';
   }
   stage.addEventListener('load',()=>{started=performance.now();playing=true;replayFrame=requestAnimationFrame(tick)});
   timeline.addEventListener('input',()=>seek(Number(timeline.value)));
   document.querySelectorAll('[data-time]').forEach(button=>button.addEventListener('click',()=>seek(Number(button.dataset.time))));
   document.getElementById('accent').addEventListener('change',mount);document.getElementById('mode').addEventListener('change',mount);
+  document.getElementById('load').addEventListener('change',mount);
   document.getElementById('replay').addEventListener('click',mount);document.getElementById('complete').addEventListener('click',()=>{stage.contentWindow.__startupPreview?.complete()});
   mount();
 </script></html>`;
@@ -115,9 +120,9 @@ try {
   assert.ok(Math.abs(samples[1].center - samples[1].width / 2) < 1, "geometry forms at the center");
   assert.ok(samples[2].core > .25 && samples[2].pulse > .1, "core activation includes one visible pulse");
   assert.ok(samples[3].wordmark > 0 && samples[3].wordmark < 1);
-  assert.equal(samples[3].wallpaper, 0, "wallpaper belongs to the final keyframe");
+  assert.equal(samples[3].wallpaper, 0, "the background stays quiet until the wordmark has appeared");
   assert.equal(samples[4].wordmark, 1);
-  assert.ok(samples[4].wallpaper > .5);
+  assert.equal(samples[4].wallpaper, .8, "the final composition must settle before the intro deadline");
   assert.equal(samples[4].pulse, 0);
   assert.equal(samples[4].particles, 0);
   assert.ok(samples[4].center < samples[1].center - 90, "the core makes room for the right-hand wordmark");
@@ -134,13 +139,50 @@ try {
     assert.ok(asset.includes(files[packs[accent].wallpaper].slice(0, 70)), "each theme retains its own wallpaper");
   }
 
-  await page.setViewportSize({ width: 344, height: 850 });
   await page.locator("#mode").selectOption("light");
   await ready();
   await seek(3200);
   const bounds = await frame().evaluate(() => ['mark','wordmark'].map(name => { const b = document.querySelector('.codex-plus-pro-startup-'+name).getBoundingClientRect(); return { left:b.left, right:b.right, width:innerWidth }; }));
-  assert.ok(bounds.every(b => b.left >= 0 && b.right <= b.width), "brand must fit a 320px startup window");
-  if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, "startup-narrow-light.png") });
+  assert.ok(bounds.every(b => b.left >= 0 && b.right <= b.width), "brand must fit the desktop startup window");
+  if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, "startup-desktop-light.png") });
+
+  const timings = [];
+  for (const load of ["fast", "normal"]) {
+    await page.locator("#load").selectOption(load);
+    await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state: "detached" });
+    const state = await frame().evaluate(() => window.__startupPreview);
+    const leaving = state.events.find(event => event.phase === "leaving");
+    assert.ok(leaving, "ready content must trigger a fade");
+    assert.equal(leaving.wallpaper, "0.8");
+    assert.equal(leaving.wordmark, "1");
+    assert.equal(leaving.moving, false, "the five-stage composition must finish before fading");
+    assert.ok(leaving.at - state.compositionAt >= 360, "even the short path must hold its stable composition for 0.4s: " + JSON.stringify({ load, leaving, compositionAt: state.compositionAt }));
+    assert.deepEqual(leaving.rates, [load === "fast" ? 3 : 1], "early readiness accelerates only the fast intro");
+    timings.push({ load, leaving: Math.round(leaving.at), hold: Math.round(leaving.at - state.compositionAt) });
+  }
+  assert.ok(timings[0].leaving < timings[1].leaving, "a fast workspace shortens the user's actual wait");
+
+  await page.locator("#load").selectOption("manual");
+  await ready();
+  await frame().waitForFunction(() => document.querySelector('[data-waiting=true]'));
+  const held = await seek(8000);
+  await page.waitForTimeout(250);
+  assert.deepEqual(await seek(8400), held, "only the status dot may animate during a long wait");
+  assert.equal(await frame().evaluate(() => getComputedStyle(document.querySelector('.codex-plus-pro-startup-caption'), '::before').animationIterationCount), "infinite");
+  await page.locator("#complete").click();
+  await frame().waitForFunction(() => document.querySelector('[data-phase=leaving]'));
+  const fading = await frame().evaluate(() => {
+    const splash = document.querySelector('[data-codex-plus-startup-splash]');
+    window.__startupPreview.loading();
+    return getComputedStyle(splash).transitionDuration;
+  });
+  assert.equal(fading, "0.18s");
+  await frame().waitForFunction(() => !document.querySelector('[data-phase=leaving]'));
+  assert.equal(await frame().evaluate(() => getComputedStyle(document.querySelector('[data-codex-plus-startup-splash]')).opacity), "1", "a returning loader immediately restores an opaque cover");
+  await page.waitForTimeout(250);
+  assert.equal(await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").count(), 1);
+  await page.locator("#complete").click();
+  await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:"detached" });
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.locator("#replay").click();
@@ -151,7 +193,8 @@ try {
   await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:"detached" });
   assert.equal(await frame().evaluate(() => document.documentElement.getAttribute('data-codex-plus-startup-state')), "ready");
   assert.deepEqual(errors, []);
-  console.log("Startup visual checks passed: five keyframes, five themes, narrow/light layout, stable hold and reduced-motion recovery.");
+  console.log("Startup visual checks passed: five keyframes/themes, desktop light mode, real fast/normal timing, final hold, slow feedback, fade recovery and reduced motion.");
+  console.log(JSON.stringify(timings));
 } finally {
   await browser.close();
 }

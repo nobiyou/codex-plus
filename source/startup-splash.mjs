@@ -1,5 +1,9 @@
 // HTML and React both own loading phases. Keep the cover outside their root.
-const STARTUP_INTRO_MS = 3200;
+const STARTUP_HOLD_MS = 400;
+const STARTUP_EXIT_MS = 180;
+const STARTUP_QUICK_WINDOW_MS = 500;
+const STARTUP_QUICK_RATE = 3;
+const STARTUP_WAIT_MS = 6000;
 const STARTUP_MARKUP = `
   <div class="codex-plus-pro-startup-wallpaper" aria-hidden="true"></div>
   <div class="codex-plus-pro-startup-tech" aria-hidden="true">
@@ -41,8 +45,9 @@ const STARTUP_STYLE = `
     --codex-plus-startup-core-offset:clamp(96px,13vw,126px);
     position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;
     overflow:hidden;pointer-events:auto;font-family:'Segoe UI Variable Display','Segoe UI',system-ui,sans-serif;
-    color:#edf6f4;background:var(--codex-plus-startup-background);isolation:isolate;
+    color:#edf6f4;background:var(--codex-plus-startup-background);isolation:isolate;opacity:1;
   }
+  .codex-plus-pro-startup-splash[data-phase=leaving] { opacity:0;transition:opacity ${STARTUP_EXIT_MS}ms ease-out }
   .codex-plus-pro-startup-splash::before {
     content:'';position:absolute;inset:0;z-index:0;
     background:radial-gradient(ellipse at 50% 48%,color-mix(in srgb,var(--codex-plus-startup-accent) 12%,transparent),transparent 55%);
@@ -51,11 +56,11 @@ const STARTUP_STYLE = `
     position:absolute;inset:-2%;z-index:0;
     background:var(--codex-pokedex-wallpaper,none) center/cover no-repeat;
     opacity:.8;transform:scale(1);
-    animation:codex-plus-startup-wallpaper 600ms 2600ms cubic-bezier(.2,.65,.35,1) both;
+    animation:codex-plus-startup-wallpaper 400ms 2400ms cubic-bezier(.2,.65,.35,1) both;
   }
   .codex-plus-pro-startup-splash::after {
     content:'';position:absolute;inset:0;z-index:1;
-    background:radial-gradient(ellipse at 50% 48%,rgba(5,13,20,.32),rgba(5,13,20,.72)),linear-gradient(0deg,rgba(5,13,20,.3),transparent 65%);
+    background:radial-gradient(ellipse 340px 220px at 50% calc(50% - 12px),rgba(5,13,20,.76),rgba(5,13,20,.34) 65%,transparent),linear-gradient(0deg,rgba(5,13,20,.44),rgba(5,13,20,.08) 35%,rgba(5,13,20,.12));
   }
   .codex-plus-pro-startup-tech { position:absolute;inset:0;z-index:2;pointer-events:none }
   .codex-plus-pro-startup-grid {
@@ -107,11 +112,13 @@ const STARTUP_STYLE = `
     animation:codex-plus-startup-wordmark 600ms 2000ms cubic-bezier(.22,.7,.25,1) both;
   }
   .codex-plus-pro-startup-title { font-size:clamp(36px,5vw,50px);font-weight:600;line-height:1.08;letter-spacing:-.055em }
-  .codex-plus-pro-startup-edition { margin-top:10px;padding-left:3px;font-size:11px;font-weight:500;line-height:1.4;letter-spacing:.38em;text-transform:uppercase;color:#b6dbc9 }
+  .codex-plus-pro-startup-edition { margin-top:10px;padding-left:3px;font-size:12px;font-weight:600;line-height:1.4;letter-spacing:.32em;text-transform:uppercase;color:#d6ecdf }
   .codex-plus-pro-startup-caption {
-    position:absolute;z-index:3;bottom:max(32px,10vh);font-size:11px;letter-spacing:.12em;color:#c0d0cb;
+    position:absolute;z-index:3;bottom:max(32px,10vh);font-size:11px;letter-spacing:.12em;color:#e4f1ed;text-shadow:0 1px 6px rgba(5,13,20,.9);
     animation:codex-plus-startup-detail 600ms 2000ms ease both;
   }
+  .codex-plus-pro-startup-caption::before { content:'';display:inline-block;width:4px;height:4px;margin:0 10px 2px 0;border-radius:50%;background:var(--codex-plus-startup-signal);opacity:.65 }
+  .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-caption::before { animation:codex-plus-startup-wait 1600ms ease-in-out infinite }
   @keyframes codex-plus-startup-particle {
     0% { opacity:0;transform:translate(var(--x),var(--y)) }
     18% { opacity:.5 }
@@ -126,8 +133,10 @@ const STARTUP_STYLE = `
   @keyframes codex-plus-startup-wordmark { from { opacity:0;transform:translate(10px,-50%) } to { opacity:1;transform:translate(0,-50%) } }
   @keyframes codex-plus-startup-wallpaper { from { opacity:0;transform:scale(1.045) } to { opacity:.8;transform:scale(1) } }
   @keyframes codex-plus-startup-grid { from { opacity:.25 } to { opacity:.13 } }
+  @keyframes codex-plus-startup-wait { 0%,100% { opacity:.35 } 50% { opacity:.85 } }
   @media (max-width:640px) { .codex-plus-pro-startup-wallpaper { background-position:68% center } }
   @media (prefers-reduced-motion:reduce) {
+    .codex-plus-pro-startup-splash { transition:none!important }
     .codex-plus-pro-startup-splash *, .codex-plus-pro-startup-splash *::before, .codex-plus-pro-startup-splash *::after { animation:none!important }
     .codex-plus-pro-startup-particles, .codex-plus-pro-startup-mark::after { display:none }
   }
@@ -161,6 +170,10 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
     let finished = false;
     let readyFrame = null;
     let introTimer = null;
+    let exitTimer = null;
+    let waitTimer = null;
+    let startedAt = 0;
+    let quickIntro = false;
     const motionPreference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
     let introComplete = Boolean(motionPreference?.matches);
     // CSS-module prefixes survive hashed builds; these are the official React
@@ -184,9 +197,14 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       readyFrame = null;
       if (introTimer !== null) window.clearTimeout(introTimer);
       introTimer = null;
+      if (exitTimer !== null) window.clearTimeout(exitTimer);
+      exitTimer = null;
+      if (waitTimer !== null) window.clearTimeout(waitTimer);
+      waitTimer = null;
       motionPreference?.removeEventListener?.("change", reduceMotion);
       window.removeEventListener("pagehide", cleanup);
       document.removeEventListener("DOMContentLoaded", sync);
+      splash?.removeEventListener("animationend", introMotionEnded);
       splash?.remove();
       style?.remove();
       document.documentElement?.setAttribute("data-codex-plus-startup-state", "ready");
@@ -197,7 +215,38 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       introComplete = true;
       if (introTimer !== null) window.clearTimeout(introTimer);
       introTimer = null;
+      if (waitTimer !== null) window.clearTimeout(waitTimer);
+      waitTimer = null;
+      if (exitTimer !== null && contentReady()) { cleanup(); return; }
       sync();
+    };
+    const cancelReveal = () => {
+      if (readyFrame !== null) window.cancelAnimationFrame(readyFrame);
+      readyFrame = null;
+      if (exitTimer !== null) window.clearTimeout(exitTimer);
+      exitTimer = null;
+      // No reverse transition: immediately cover a returning React loader.
+      splash?.removeAttribute("data-phase");
+    };
+    const finishIntro = () => {
+      introTimer = null;
+      introComplete = true;
+      sync();
+    };
+    const introMotionEnded = (event) => {
+      if (event.animationName !== "codex-plus-startup-wallpaper" || finished || introComplete || introTimer !== null) return;
+      // Start the hold from the actual final paint, including any asset/style
+      // delays. A wall-clock deadline alone can consume the entire hold.
+      introTimer = window.setTimeout(finishIntro, ${STARTUP_HOLD_MS});
+    };
+    const reveal = () => {
+      if (motionPreference?.matches) { cleanup(); return; }
+      splash.setAttribute("data-phase", "leaving");
+      exitTimer = window.setTimeout(() => {
+        exitTimer = null;
+        if (contentReady()) cleanup();
+        else cancelReveal();
+      }, ${STARTUP_EXIT_MS});
     };
     const applyAssets = () => { ${assetSource} };
     const sync = () => {
@@ -239,26 +288,37 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
         splash.setAttribute("aria-live", "polite");
         splash.setAttribute("aria-label", "正在加载 Codex Plus Pro");
         splash.innerHTML = ${JSON.stringify(STARTUP_MARKUP)};
+        splash.addEventListener("animationend", introMotionEnded);
         (document.body || root).appendChild(splash);
         root.setAttribute("data-codex-plus-startup-state", "loading");
-        if (!introComplete) introTimer = window.setTimeout(() => {
-          introTimer = null;
-          introComplete = true;
-          sync();
-        }, ${STARTUP_INTRO_MS});
+        startedAt = performance.now();
+        if (!introComplete) {
+          waitTimer = window.setTimeout(() => {
+            waitTimer = null;
+            splash.setAttribute("data-waiting", "true");
+          }, ${STARTUP_WAIT_MS});
+        }
       }
       if (document.body && splash.parentNode !== document.body) document.body.appendChild(splash);
-      if (!introComplete || !contentReady()) {
-        if (readyFrame !== null) window.cancelAnimationFrame(readyFrame);
-        readyFrame = null;
-        return;
-      }
+      if (!contentReady()) { cancelReveal(); return; }
+      if (exitTimer !== null) return;
       // Check across a painted frame so a transient empty/loading handoff cannot
       // expose the next React fallback. The intro deadline never ends a slow load.
       if (readyFrame === null) readyFrame = window.requestAnimationFrame(() => {
         readyFrame = window.requestAnimationFrame(() => {
           readyFrame = null;
-          if (contentReady()) cleanup();
+          if (!contentReady()) { cancelReveal(); return; }
+          if (!introComplete) {
+            const elapsed = performance.now() - startedAt;
+            // Early painted content is a fast load, not evidence of a warm
+            // process. Accelerate from the current frame without skipping it.
+            if (!quickIntro && elapsed <= ${STARTUP_QUICK_WINDOW_MS}) {
+              quickIntro = true;
+              for (const animation of splash.getAnimations({ subtree: true })) animation.updatePlaybackRate(${STARTUP_QUICK_RATE});
+            }
+            return;
+          }
+          reveal();
         });
       });
     };

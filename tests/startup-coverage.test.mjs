@@ -19,7 +19,11 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
   const splashes = [];
   const properties = new Map();
   const attributes = new Map();
-  const root = { setAttribute: (key, value) => attributes.set(key, value), getAttribute: (key) => attributes.get(key), hasAttribute: (key) => attributes.has(key), classList: { toggle() {} }, style: { setProperty: (key, value) => properties.set(key, value) }, appendChild: (node) => { node.parentNode = root; (node.tag === "style" ? styles : splashes).push(node); } };
+  const root = { setAttribute: (key, value) => attributes.set(key, value), getAttribute: (key) => attributes.get(key), hasAttribute: (key) => attributes.has(key), classList: { toggle() {} }, style: { setProperty: (key, value) => properties.set(key, value) }, appendChild: (node) => {
+    node.parentNode = root;
+    (node.tag === "style" ? styles : splashes).push(node);
+    if (node.tag === "div" && !motion.matches) motionEndsAt = now + 2800;
+  } };
   const nativeLoader = { isConnected: loader, children: ["native-logo"], removeAttribute() {}, replaceChildren(...children) { this.children = children; } };
   const reactLoader = { isConnected: react };
   const content = { kind: loader || react ? "empty" : "workspace" };
@@ -32,6 +36,7 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
   const frames = new Map();
   const timers = new Map();
   let now = 0;
+  let motionEndsAt = null;
   let timerId = 0;
   let frameId = 0;
   let observer;
@@ -47,7 +52,7 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
     getElementById: (id) => id === "root" ? appRoot : null,
     querySelector: (selector) => nativeLoader.isConnected && selector.includes(".startup-loader") ? nativeLoader : reactLoader.isConnected && selector.includes("_delayedBlossom_") ? reactLoader : null,
     addEventListener: (type, callback) => listeners.set(type, callback), removeEventListener: (type) => listeners.delete(type),
-    createElement: (tag) => ({ tag, removed: false, setAttribute() {}, remove() { this.removed = true; } }),
+    createElement: (tag) => ({ tag, removed: false, attributes: new Map(), listeners: new Map(), addEventListener(type, callback) { this.listeners.set(type, callback); }, removeEventListener(type) { this.listeners.delete(type); }, setAttribute(key, value) { this.attributes.set(key, value); }, removeAttribute(key) { this.attributes.delete(key); }, getAttribute(key) { return this.attributes.get(key); }, getAnimations: () => [{ updatePlaybackRate(rate) { if (motionEndsAt !== null) motionEndsAt = now + (motionEndsAt - now) / rate; } }], remove() { this.removed = true; } }),
   };
   const saved = new Map([
     ["codex-plus-pro-settings-v1", JSON.stringify({ theme, accent, wallpaperMode: custom ? "custom" : "default", logoMode: custom ? "custom" : "default" })],
@@ -55,23 +60,41 @@ function fixture({ route = "", theme = true, parsing = false, loader = true, rea
     ["codex-plus-pro-logo-v1", "data:image/png;base64,custom-logo"],
   ]);
   const source = buildStartupSource({ css, assetSource, accentOptions });
-  const context = vm.createContext({ window, document, URL, location: new URL(`app://-/index.html${route ? `?initialRoute=${encodeURIComponent(route)}` : ""}`), localStorage: { getItem: (key) => saved.get(key) || null }, MutationObserver: class { constructor(callback) { observer = this; this.callback = callback; } observe() { this.active = true; } disconnect() { this.active = false; } } });
+  const context = vm.createContext({ window, document, URL, performance: { now: () => now }, location: new URL(`app://-/index.html${route ? `?initialRoute=${encodeURIComponent(route)}` : ""}`), localStorage: { getItem: (key) => saved.get(key) || null }, MutationObserver: class { constructor(callback) { observer = this; this.callback = callback; } observe() { this.active = true; } disconnect() { this.active = false; } } });
   const run = () => vm.runInContext(source, context);
   const paint = () => { const pending = [...frames]; frames.clear(); for (const [, callback] of pending) callback(); };
-  const advance = milliseconds => { now += milliseconds; for (const [id, timer] of [...timers]) if (timer.at <= now) { timers.delete(id); timer.callback(); } };
-  return { window, document, nativeLoader, reactLoader, content, styles, splashes, properties, attributes, listeners, saved, run, mutate: () => { if (observer?.active) observer.callback(); }, paint, frames, timers, advance, reduceMotion: () => { motion.matches = true; listeners.get("motion")?.(); }, observing: () => observer?.active, root };
+  const advance = milliseconds => {
+    const end = now + milliseconds;
+    for (;;) {
+      const next = [...timers].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (motionEndsAt !== null && motionEndsAt <= end && (!next || motionEndsAt <= next[1].at)) {
+        now = motionEndsAt;
+        motionEndsAt = null;
+        splashes[0]?.listeners.get("animationend")?.({ animationName: "codex-plus-startup-wallpaper" });
+        continue;
+      }
+      if (!next) break;
+      const [id, timer] = next;
+      now = timer.at;
+      timers.delete(id);
+      timer.callback();
+    }
+    now = end;
+  };
+  return { window, document, nativeLoader, reactLoader, content, styles, splashes, properties, attributes, listeners, saved, run, mutate: () => { if (observer?.active) observer.callback(); }, paint, frames, timers, advance, delayMotion: milliseconds => { motionEndsAt += milliseconds; }, reduceMotion: () => { motion.matches = true; motionEndsAt = null; listeners.get("motion")?.(); }, observing: () => observer?.active, root };
 }
 
-test("a fast workspace waits for the complete 3.2-second introduction", () => {
+test("normal startup holds the finished composition before fading into painted content", () => {
   const f = fixture();
   f.run();
+  f.advance(1000);
   f.nativeLoader.isConnected = false;
   f.content.kind = "workspace";
   f.mutate();
   f.paint();
   f.paint();
-  assert.equal(f.splashes[0].removed, false, "fast startup must not truncate the five keyframes");
-  f.advance(3199);
+  assert.equal(f.splashes[0].removed, false);
+  f.advance(2199);
   f.paint();
   f.paint();
   assert.equal(f.splashes[0].removed, false);
@@ -79,8 +102,57 @@ test("a fast workspace waits for the complete 3.2-second introduction", () => {
   f.paint();
   assert.equal(f.splashes[0].removed, false, "the actual destination still needs a stable painted frame");
   f.paint();
+  assert.equal(f.splashes[0].removed, false, "the cover fades instead of vanishing at the deadline");
+  assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+  f.advance(179);
+  assert.equal(f.splashes[0].removed, false);
+  f.advance(1);
   assert.equal(f.splashes[0].removed, true);
   assert.equal(f.timers.size, 0);
+});
+
+test("a workspace painted in the first half-second gets a short intro and a real final hold", () => {
+  const f = fixture();
+  f.run();
+  f.advance(100);
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate();
+  f.paint();
+  f.paint();
+  f.advance(1299);
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), undefined, "the short path still holds its final composition");
+  f.advance(1);
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+  f.advance(180);
+  assert.equal(f.splashes[0].removed, true, "a fast workspace is usable well before the full intro deadline");
+  assert.equal(f.timers.size, 0);
+});
+
+test("delayed animation rendering cannot consume the final hold", () => {
+  const f = fixture();
+  f.run();
+  f.delayMotion(800);
+  f.advance(1000);
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate();
+  f.paint();
+  f.paint();
+  f.advance(2999);
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), undefined);
+  f.advance(1);
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+  f.advance(180);
+  assert.equal(f.splashes[0].removed, true);
 });
 
 test("reduced motion shows the final state and adds no artificial startup delay", () => {
@@ -126,6 +198,7 @@ test("startup coverage survives document load and ends with painted application 
   f.paint();
   assert.equal(f.styles[0].removed, false, "wait through the first painted frame");
   f.paint();
+  f.advance(180);
   assert.equal(f.styles[0].removed, true);
   assert.equal(f.splashes[0].removed, true);
   assert.equal(f.attributes.get("data-codex-plus-startup-state"), "ready");
@@ -133,6 +206,19 @@ test("startup coverage survives document load and ends with painted application 
   assert.equal(f.listeners.size, 0);
   f.run();
   assert.equal(f.styles.length, 1, "later runtime refresh must not replay startup");
+});
+
+test("slow startup adds quiet status feedback without replaying the brand", () => {
+  const f = fixture();
+  f.run();
+  f.advance(5999);
+  assert.equal(f.splashes[0].getAttribute("data-waiting"), undefined);
+  f.advance(1);
+  assert.equal(f.splashes[0].getAttribute("data-waiting"), "true");
+  f.advance(60000);
+  assert.equal(f.splashes.length, 1);
+  assert.equal(f.splashes[0].removed, false);
+  assert.equal(f.timers.size, 0, "long startup requires no JavaScript polling");
 });
 
 test("startup uses saved theme assets, custom uploads, and dark/reduced-motion CSS", () => {
@@ -188,6 +274,7 @@ test("removing the HTML loader does not expose the React bootstrap logo", () => 
   f.mutate();
   f.paint();
   f.paint();
+  f.advance(180);
   assert.equal(f.splashes[0].removed, true);
 });
 
@@ -202,6 +289,7 @@ test("a late injector also covers the React phase and exposes login/error recove
     f.mutate();
     f.paint();
     f.paint();
+    f.advance(180);
     assert.equal(f.splashes[0].removed, true, destination);
     assert.equal(f.frames.size, 0);
     assert.equal(f.observing(), false);
@@ -239,6 +327,51 @@ test("a new loading phase cancels a pending reveal and page exit cancels animati
   f.listeners.get("pagehide")();
   assert.equal(f.frames.size, 0);
   assert.equal(f.splashes[0].removed, true);
+});
+
+test("a returning loader aborts the fade and the next reveal rechecks painted content", () => {
+  const f = fixture();
+  f.run();
+  f.advance(3200);
+  f.nativeLoader.isConnected = false;
+  f.content.kind = "workspace";
+  f.mutate();
+  f.paint();
+  f.paint();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+  f.advance(90);
+  f.reactLoader.isConnected = true;
+  f.mutate();
+  assert.equal(f.splashes[0].getAttribute("data-phase"), undefined, "restore the opaque cover as soon as loading returns");
+  f.advance(5000);
+  assert.equal(f.splashes[0].removed, false);
+  f.reactLoader.isConnected = false;
+  f.mutate();
+  f.paint();
+  f.paint();
+  f.advance(180);
+  assert.equal(f.splashes[0].removed, true);
+  assert.equal(f.timers.size, 0);
+});
+
+test("reduced motion or page exit during a fade releases every pending resource", () => {
+  for (const action of [f => f.reduceMotion(), f => f.listeners.get("pagehide")()]) {
+    const f = fixture();
+    f.run();
+    f.advance(3200);
+    f.nativeLoader.isConnected = false;
+    f.content.kind = "workspace";
+    f.mutate();
+    f.paint();
+    f.paint();
+    assert.equal(f.splashes[0].getAttribute("data-phase"), "leaving");
+    action(f);
+    assert.equal(f.splashes[0].removed, true);
+    assert.equal(f.timers.size, 0);
+    assert.equal(f.frames.size, 0);
+    assert.equal(f.listeners.size, 0);
+    assert.equal(f.observing(), false);
+  }
 });
 
 test("a new renderer installs startup immediately before subscribing to runtime events", async () => {
