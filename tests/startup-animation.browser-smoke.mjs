@@ -68,10 +68,10 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
       'document.addEventListener("animationend",event=>{if(window.__startupPreview?.scrubbing)event.stopImmediatePropagation()},true);'+
       'window.__startupPreviewStorage=new Map([["codex-plus-pro-settings-v1",'+JSON.stringify(JSON.stringify({theme:true,accent}))+'],['+JSON.stringify(timingKey)+','+JSON.stringify(JSON.stringify(profile.history))+']]);'+
       'new Function("location","localStorage",'+JSON.stringify(runtime)+')(new URL("app://-/index.html"),{getItem:key=>window.__startupPreviewStorage.get(key),setItem:(key,value)=>window.__startupPreviewStorage.set(key,value)});'+
-      'window.__startupPreview={introMs:'+introMs+',events:[],compositionAt:null,scrubbing:false,seek:ms=>{window.__startupPreview.scrubbing=true;document.querySelector("[data-codex-plus-startup-splash]")?.removeAttribute("data-waiting");document.getAnimations().forEach(a=>{a.pause();a.currentTime=ms})},complete:()=>{const state=window.__startupPreview;if(state.scrubbing){state.seek(state.introMs);state.scrubbing=false;document.getAnimations().forEach(a=>{a.currentTime=a.effect.getComputedTiming().endTime-1;a.play()})}document.getElementById("root").innerHTML="<button>工作区已就绪</button>"},loading:()=>{document.getElementById("root").innerHTML="<div class=startup-loader><div class=startup-loader__logo>原始启动画面</div></div>"}};'+
+      'window.__startupPreview={introMs:'+introMs+',events:[],compositionAt:null,scrubbing:false,seek:ms=>{window.__startupPreview.scrubbing=true;document.querySelector("[data-codex-plus-startup-splash]")?.removeAttribute("data-waiting");document.getAnimations().forEach(a=>{a.pause();a.currentTime=ms})},complete:()=>{const state=window.__startupPreview;if(state.scrubbing){state.seek(state.introMs);state.scrubbing=false;document.getAnimations().forEach(a=>{a.currentTime=Math.min(state.introMs,a.effect.getComputedTiming().endTime-1);a.play()})}document.getElementById("root").innerHTML="<button>工作区已就绪</button>"},loading:()=>{document.getElementById("root").innerHTML="<div class=startup-loader><div class=startup-loader__logo>原始启动画面</div></div>"}};'+
       'const splash=document.querySelector("[data-codex-plus-startup-splash]"),state=window.__startupPreview;'+
-      'Promise.all(splash.getAnimations({subtree:true}).map(a=>a.finished)).then(()=>{state.compositionAt=performance.now()-startedAt}).catch(()=>{});'+
-      'new MutationObserver(()=>{const phase=splash.isConnected?splash.getAttribute("data-phase")||"loading":"ready";if(state.events.at(-1)?.phase===phase)return;const animations=splash.getAnimations({subtree:true}).filter(a=>a instanceof CSSAnimation);state.events.push({phase,at:performance.now()-startedAt,wallpaper:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wallpaper")).opacity,wordmark:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wordmark")).opacity,moving:animations.some(a=>a.playState==="running"),rates:[...new Set(animations.map(a=>a.playbackRate))]})}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-phase"]});'+
+      'Promise.all(splash.getAnimations({subtree:true}).filter(a=>a.effect.getTiming().iterations!==Infinity).map(a=>a.finished)).then(()=>{state.compositionAt=performance.now()-startedAt}).catch(()=>{});'+
+      'new MutationObserver(()=>{const phase=splash.isConnected?splash.getAttribute("data-phase")||"loading":"ready";if(state.events.at(-1)?.phase===phase)return;const animations=splash.getAnimations({subtree:true}).filter(a=>a instanceof CSSAnimation);state.events.push({phase,at:performance.now()-startedAt,wallpaper:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wallpaper")).opacity,wordmark:getComputedStyle(splash.querySelector(".codex-plus-pro-startup-wordmark")).opacity,moving:animations.filter(a=>a.effect.getTiming().iterations!==Infinity).some(a=>a.playState==="running"),rates:[...new Set(animations.map(a=>a.playbackRate))]})}).observe(document.body,{childList:true,subtree:true,attributes:true,attributeFilter:["data-phase"]});'+
       (document.getElementById('load').value==='manual'?'':'setTimeout(state.complete,'+(document.getElementById('load').value==='fast'?100:1000)+');');
     stage.srcdoc='<!doctype html><html lang="zh-CN" data-theme="'+mode+'"><meta charset="utf-8"><style>body{margin:0;background:#101921;color:#e3f0ea;font-family:system-ui}html[data-theme=light] body{background:#f4f8fd;color:#1f3a5f}#root{min-height:100vh;display:grid;place-items:center}.startup-loader__logo{font-size:36px}button{padding:12px 20px;border:1px solid #587467;border-radius:8px;background:#192e26;color:#def5e8}html[data-theme=light] button{background:#eaf2fb;border-color:#b4cbe0;color:#1f3a5f}</style><body><div id="root"><div class="startup-loader"><div class="startup-loader__logo">原始启动画面</div></div></div><script>'+init+'<'+ '/script>';
   }
@@ -146,6 +146,7 @@ try {
         return (Math.max(backgroundLight, foreground) + .05) / (Math.min(backgroundLight, foreground) + .05);
       }),
       overlay: getComputedStyle(splash, '::after').backgroundImage,
+      orbitColors: ['gradient-cyan','gradient-blue'].map(name=>rgb(getComputedStyle(splash.querySelector('.codex-plus-pro-startup-'+name)).stopColor)),
       wallpaper: getComputedStyle(splash.querySelector('.codex-plus-pro-startup-wallpaper')).backgroundImage,
       motion: splash.getAnimations({subtree:true}).filter(a => a instanceof CSSAnimation && a.animationName !== 'codex-plus-startup-wait').map(a => ({name:a.animationName, delay:a.effect.getTiming().delay, duration:a.effect.getTiming().duration})),
     };
@@ -188,6 +189,29 @@ try {
   assert.ok(samples[4].center < samples[1].center - 90, "the core makes room for the right-hand wordmark");
   assert.deepEqual(await seek(3200), await seek(8000), "the brand entrance must not replay after its final keyframe");
 
+  const scan = ms => frame().evaluate(ms => {
+    window.__startupPreview.seek(ms);
+    const style = name => getComputedStyle(document.querySelector('.codex-plus-pro-startup-'+name));
+    const orbit = name => {
+      const node = document.querySelector('.codex-plus-pro-startup-orbit-'+name);
+      const matrix = new DOMMatrixReadOnly(getComputedStyle(node).transform);
+      const head = node.querySelector('.codex-plus-pro-startup-orbit-head').getBoundingClientRect();
+      const mark = document.querySelector('.codex-plus-pro-startup-mark').getBoundingClientRect();
+      const radius = Math.hypot(head.x+head.width/2-(mark.x+mark.width/2),head.y+head.height/2-(mark.y+mark.height/2));
+      return { angle:Math.atan2(matrix.b,matrix.a)*180/Math.PI, radius, animation:node.getAnimations()[0].animationName };
+    };
+    return { outer:orbit('outer'), inner:orbit('inner'), opacity:style('orbit-reveal').opacity,
+      strokes:['sweep-outer','sweep-inner'].map(name=>({ stroke:style(name).stroke, glow:style(name).filter, width:parseFloat(style(name).strokeWidth) })) };
+  }, ms);
+  const firstScan = await scan(4000), laterScan = await scan(4300);
+  assert.ok(laterScan.outer.angle > firstScan.outer.angle + 15, 'the outer scan rotates clockwise after core activation');
+  assert.ok(laterScan.inner.angle < firstScan.inner.angle - 20, 'the inner scan rotates counterclockwise at its own pace');
+  assert.ok(Number(laterScan.opacity) > .9, 'both scanning arcs are visible before the wordmark settles');
+  for (const sample of [firstScan,laterScan]) {
+    assert.ok(sample.strokes.every(s=>s.stroke.includes('url(') && s.glow.includes('drop-shadow') && s.width>1), 'both rings have gradient light trails and a restrained glow');
+    assert.ok(Math.abs(sample.outer.radius - 54*116/128) < .6 && Math.abs(sample.inner.radius - 43*116/128) < .6, 'the light heads stay on concentric tracks');
+  }
+
   for (const accent of Object.keys(packs)) {
     await page.locator("#accent").selectOption(accent);
     await ready();
@@ -208,6 +232,7 @@ try {
     assert.ok(light.textLight < .15 && dark.textLight > .6, `${accent}: light mode uses dark lettering and dark mode uses light lettering`);
     assert.ok([...light.textContrast, ...dark.textContrast].every(value => value >= 4.5), `${accent}: title and supporting text must contrast with their base surface`);
     assert.notEqual(light.overlay, dark.overlay, `${accent}: the wallpaper wash must also follow the mode`);
+    assert.notDeepEqual(light.orbitColors,dark.orbitColors, `${accent}: light mode uses deeper scan colors and dark mode uses luminous scan colors`);
     assert.equal(light.wallpaper, dark.wallpaper, "appearance changes retain the selected theme artwork");
     assert.deepEqual(light.motion, dark.motion, "appearance changes share one motion sequence");
     if (artifactDir) await page.locator("#stage").screenshot({ path: path.join(artifactDir, `startup-${accent}-light.png`) });
@@ -249,7 +274,7 @@ try {
     const expected = profiles[profile].introMs;
     const pacing = await frame().evaluate(() => {
       const splash = document.querySelector('[data-codex-plus-startup-splash]');
-      return { introMs:Number(splash.getAttribute('data-intro-ms')), motionEnd:Math.max(...splash.getAnimations({subtree:true}).map(a=>a.effect.getComputedTiming().endTime)) };
+      return { introMs:Number(splash.getAttribute('data-intro-ms')), motionEnd:Math.max(...splash.getAnimations({subtree:true}).filter(a=>a.effect.getTiming().iterations!==Infinity).map(a=>a.effect.getComputedTiming().endTime)) };
     });
     assert.equal(pacing.introMs, expected);
     assert.ok(Math.abs(pacing.motionEnd - (expected - 400)) < 1, 'every finite stage must follow the learned startup budget');
@@ -324,10 +349,10 @@ try {
   const waitingSample = () => frame().evaluate(() => {
     const el = name => document.querySelector('.codex-plus-pro-startup-' + name);
     const style = name => getComputedStyle(el(name));
-    const orbit = el('waiting-orbit').getAnimations()[0];
+    const orbit = el('orbit-outer').getAnimations()[0];
     const geometry = name => { const r = el(name).getBoundingClientRect(); return [r.x,r.y,r.width,r.height]; };
     return {
-      at:orbit.currentTime, orbit:style('waiting-orbit').transform, inner:Number(style('inner-ring').opacity), wallpaper:style('wallpaper').transform,
+      at:orbit.currentTime, orbit:style('orbit-outer').transform, innerOrbit:style('orbit-inner').transform, orbitOpacity:style('orbit-reveal').opacity, inner:Number(style('inner-ring').opacity), wallpaper:style('wallpaper').transform,
       mark:geometry('mark'), wordmark:geometry('wordmark'), title:style('wordmark').opacity, core:style('core-logo').opacity,
       wallpaperOpacity:style('wallpaper').opacity, pulse:getComputedStyle(el('mark'),'::after').opacity,
       caption:el('caption').textContent, nativeLogo:getComputedStyle(document.querySelector('.startup-loader__logo')).visibility,
@@ -335,12 +360,14 @@ try {
     };
   });
   const firstWait = await waitingSample();
-  await frame().waitForFunction(time => document.querySelector('.codex-plus-pro-startup-waiting-orbit').getAnimations()[0].currentTime >= time + 900, firstWait.at);
+  await frame().waitForFunction(time => document.querySelector('.codex-plus-pro-startup-orbit-outer').getAnimations()[0].currentTime >= time + 900, firstWait.at);
   const laterWait = await waitingSample();
   for (const sample of [firstWait,laterWait]) {
-    assert.deepEqual(sample.loops.map(a=>a.name).sort(), ['codex-plus-startup-wait','codex-plus-startup-wait-orbit','codex-plus-startup-wait-ring','codex-plus-startup-wait-wallpaper'].sort());
+    assert.deepEqual(sample.loops.map(a=>a.name).sort(), ['codex-plus-startup-wait','codex-plus-startup-scan-outer','codex-plus-startup-scan-inner','codex-plus-startup-wait-ring','codex-plus-startup-wait-wallpaper'].sort());
     assert.ok(sample.loops.every(a=>a.state==='running'));
-    assert.equal(sample.loops.find(a=>a.name==='codex-plus-startup-wait-orbit').duration,4800, 'learning a longer entrance must not slow the continuous waiting orbit');
+    assert.equal(sample.loops.find(a=>a.name==='codex-plus-startup-scan-outer').duration,4800, 'learning a longer entrance must not slow the continuous waiting orbit');
+    assert.equal(sample.loops.find(a=>a.name==='codex-plus-startup-scan-inner').duration,3600);
+    assert.equal(sample.orbitOpacity,'1');
     assert.equal(sample.title,'1');
     assert.equal(sample.core,'1');
     assert.equal(sample.pulse,'0');
@@ -348,7 +375,8 @@ try {
     assert.equal(sample.caption,'正在加载工作区');
     assert.equal(sample.nativeLogo,'hidden');
   }
-  assert.notEqual(firstWait.orbit,laterWait.orbit,'a visible arc must keep rotating throughout loading');
+  assert.notEqual(firstWait.orbit,laterWait.orbit,'the outer light arc must keep rotating throughout loading');
+  assert.notEqual(firstWait.innerOrbit,laterWait.innerOrbit,'the inner light arc must also keep rotating throughout loading');
   assert.notEqual(firstWait.wallpaper,laterWait.wallpaper,'the theme wallpaper must keep moving gently');
   assert.deepEqual(firstWait.mark,laterWait.mark,'the logo remains settled while loading');
   assert.deepEqual(firstWait.wordmark,laterWait.wordmark,'the wordmark remains settled while loading');
@@ -365,13 +393,20 @@ try {
   await page.waitForTimeout(300);
   assert.deepEqual(await frame().evaluate(()=>document.getAnimations().map(a=>a.currentTime)),pausedWait,'continuous loading also pauses when hidden');
   await frame().evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
-  await page.locator("#complete").click();
-  await frame().waitForFunction(() => document.querySelector('[data-phase=leaving]'));
-  const fading = await frame().evaluate(() => {
+  // Observe and interrupt the short fade inside the page. A remote round trip
+  // can arrive after the entire 180ms transition on a busy desktop.
+  const fading = await frame().evaluate(() => new Promise(resolve => {
     const splash = document.querySelector('[data-codex-plus-startup-splash]');
-    window.__startupPreview.loading();
-    return getComputedStyle(splash).transitionDuration;
-  });
+    const observer = new MutationObserver(() => {
+      if (splash.getAttribute('data-phase') !== 'leaving') return;
+      const duration = getComputedStyle(splash).transitionDuration;
+      observer.disconnect();
+      window.__startupPreview.loading();
+      resolve(duration);
+    });
+    observer.observe(splash,{attributes:true,attributeFilter:['data-phase']});
+    window.__startupPreview.complete();
+  }));
   assert.equal(fading, "0.18s");
   await frame().waitForFunction(() => !document.querySelector('[data-phase=leaving]'));
   assert.equal(await frame().evaluate(() => getComputedStyle(document.querySelector('[data-codex-plus-startup-splash]')).opacity), "1", "a returning loader immediately restores an opaque cover");
@@ -392,7 +427,7 @@ try {
   await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:"detached" });
   assert.equal(await frame().evaluate(() => document.documentElement.getAttribute('data-codex-plus-startup-state')), "ready");
   assert.deepEqual(errors, []);
-  console.log("Startup visual checks passed: five keyframes, five light/dark themes, learned pacing, actual readiness records, full fast/normal playback, delayed presentation, continuous loading with stable branding, hidden/resumed motion, final hold, fade recovery and reduced motion.");
+  console.log("Startup visual checks passed: gradient scans on both rings, opposing concentric motion, light/dark scan palettes, five keyframes, five themes, learned pacing, actual readiness records, full playback, continuous loading, visibility pause, final hold, fade recovery and reduced motion.");
   console.log(JSON.stringify(timings));
 } finally {
   await browser.close();

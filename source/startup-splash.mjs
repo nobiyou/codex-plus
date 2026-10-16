@@ -19,9 +19,30 @@ const STARTUP_MARKUP = `
   <div class="codex-plus-pro-startup-brand">
     <div class="codex-plus-pro-startup-mark" aria-hidden="true">
       <svg class="codex-plus-pro-startup-geometry" viewBox="0 0 128 128" fill="none">
+        <defs>
+          <linearGradient id="codex-plus-startup-outer-light" x1="118" y1="64" x2="10" y2="64" gradientUnits="userSpaceOnUse">
+            <stop class="codex-plus-pro-startup-gradient-head"/>
+            <stop class="codex-plus-pro-startup-gradient-cyan" offset=".35"/>
+            <stop class="codex-plus-pro-startup-gradient-cyan" offset="1" stop-opacity=".05"/>
+          </linearGradient>
+          <linearGradient id="codex-plus-startup-inner-light" x1="107" y1="64" x2="21" y2="64" gradientUnits="userSpaceOnUse">
+            <stop class="codex-plus-pro-startup-gradient-head"/>
+            <stop class="codex-plus-pro-startup-gradient-blue" offset=".4"/>
+            <stop class="codex-plus-pro-startup-gradient-blue" offset="1" stop-opacity=".06"/>
+          </linearGradient>
+        </defs>
         <circle class="codex-plus-pro-startup-ring" cx="64" cy="64" r="54" pathLength="1"/>
         <circle class="codex-plus-pro-startup-inner-ring" cx="64" cy="64" r="43" pathLength="1"/>
-        <circle class="codex-plus-pro-startup-waiting-orbit" cx="64" cy="64" r="54" pathLength="1"/>
+        <g class="codex-plus-pro-startup-orbit-reveal">
+          <g class="codex-plus-pro-startup-orbit-outer">
+            <circle class="codex-plus-pro-startup-sweep-outer" cx="64" cy="64" r="54" pathLength="1"/>
+            <circle class="codex-plus-pro-startup-orbit-head" cx="118" cy="64" r="1.5"/>
+          </g>
+          <g class="codex-plus-pro-startup-orbit-inner">
+            <circle class="codex-plus-pro-startup-sweep-inner" cx="64" cy="64" r="43" pathLength="1"/>
+            <circle class="codex-plus-pro-startup-orbit-head" cx="107" cy="64" r="1.15"/>
+          </g>
+        </g>
       </svg>
       <span class="codex-plus-pro-startup-core-logo"></span>
     </div>
@@ -42,6 +63,10 @@ const STARTUP_STYLE = `
     --codex-plus-startup-foreground:var(--color-token-text-primary,#1f3a5f);
     --codex-plus-startup-wash:var(--codex-plus-startup-background);
     --codex-plus-startup-signal:#286e50;
+    --codex-plus-startup-orbit-cyan:color-mix(in srgb,var(--codex-plus-startup-accent) 18%,#0086ad);
+    --codex-plus-startup-orbit-blue:color-mix(in srgb,var(--codex-plus-startup-accent) 24%,#4265d5);
+    --codex-plus-startup-orbit-ice:#d5fbff;
+    --codex-plus-startup-orbit-glow:.35;
     --codex-plus-startup-wallpaper-opacity:.8;
     --codex-plus-startup-core-size:clamp(88px,12vw,116px);
     --codex-plus-startup-core-offset:clamp(96px,13vw,126px);
@@ -52,6 +77,9 @@ const STARTUP_STYLE = `
   :root.electron-dark .codex-plus-pro-startup-splash {
     --codex-plus-startup-wash:#050d14;
     --codex-plus-startup-signal:#8cdeba;
+    --codex-plus-startup-orbit-cyan:color-mix(in srgb,var(--codex-plus-startup-accent) 18%,#45e4ff);
+    --codex-plus-startup-orbit-blue:color-mix(in srgb,var(--codex-plus-startup-accent) 24%,#839bff);
+    --codex-plus-startup-orbit-glow:.6;
     --codex-plus-startup-wallpaper-opacity:.62;
     color-scheme:dark;
   }
@@ -76,13 +104,13 @@ const STARTUP_STYLE = `
   .codex-plus-pro-startup-tech { position:absolute;inset:0;z-index:2;pointer-events:none }
   .codex-plus-pro-startup-grid {
     position:absolute;inset:0;opacity:.13;
-    background:radial-gradient(circle,color-mix(in srgb,var(--codex-plus-startup-highlight) 60%,var(--codex-plus-startup-foreground)) .65px,transparent .85px) center/36px 36px;
+    background:radial-gradient(circle,color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 60%,var(--codex-plus-startup-foreground)) .65px,transparent .85px) center/36px 36px;
     mask-image:radial-gradient(ellipse at center,transparent 10%,black 45%,transparent 73%);
     animation:codex-plus-startup-grid 2600ms ease both;
   }
   .codex-plus-pro-startup-particles span {
     position:absolute;left:50%;top:50%;font:10px/1.2 Consolas,'Cascadia Code',monospace;
-    color:color-mix(in srgb,var(--codex-plus-startup-highlight) 45%,var(--codex-plus-startup-foreground));opacity:0;white-space:nowrap;
+    color:color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 55%,var(--codex-plus-startup-foreground));opacity:0;white-space:nowrap;
     animation:codex-plus-startup-particle 1300ms var(--delay,0ms) cubic-bezier(.3,.05,.4,1) both;
   }
   .codex-plus-pro-startup-brand { position:relative;z-index:3;width:min(440px,calc(100vw - 44px));height:164px;transform:translateY(-12px) }
@@ -93,29 +121,41 @@ const STARTUP_STYLE = `
   }
   .codex-plus-pro-startup-mark::before {
     content:'';position:absolute;inset:24%;border-radius:50%;
-    background:radial-gradient(circle at 35% 30%,color-mix(in srgb,var(--codex-plus-startup-accent) 65%,#152126),var(--codex-plus-startup-deep));
-    box-shadow:0 0 30px color-mix(in srgb,var(--codex-plus-startup-accent) 16%,transparent);
+    background:radial-gradient(circle at 35% 25%,color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 34%,var(--codex-plus-startup-deep)),var(--codex-plus-startup-deep) 75%);
+    box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 48%,transparent),0 0 18px color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) 18%,transparent),0 0 40px color-mix(in srgb,var(--codex-plus-startup-orbit-blue) 12%,transparent);
     animation:codex-plus-startup-core 300ms 1300ms ease both;
   }
   .codex-plus-pro-startup-mark::after {
-    content:'';position:absolute;inset:5%;border:1px solid color-mix(in srgb,var(--codex-plus-startup-highlight) 60%,var(--codex-plus-startup-foreground));border-radius:50%;opacity:0;
+    content:'';position:absolute;inset:5%;border:1px solid var(--codex-plus-startup-orbit-cyan);border-radius:50%;opacity:0;
     animation:codex-plus-startup-pulse 400ms 1600ms cubic-bezier(.2,.65,.35,1) both;
   }
-  .codex-plus-pro-startup-geometry { position:absolute;inset:0;width:100%;height:100%;stroke-width:1;stroke-linecap:round;stroke-linejoin:round }
+  .codex-plus-pro-startup-geometry { position:absolute;inset:0;width:100%;height:100%;overflow:visible;stroke-width:1;stroke-linecap:round;stroke-linejoin:round }
   .codex-plus-pro-startup-ring {
-    stroke:color-mix(in srgb,var(--codex-plus-startup-highlight) 40%,var(--codex-plus-startup-foreground));stroke-width:1.35;stroke-dasharray:1;opacity:.68;
+    stroke:var(--codex-plus-startup-orbit-cyan);stroke-width:.9;stroke-dasharray:1;opacity:.3;
     transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;
     animation:codex-plus-startup-outer-orbit 1500ms 500ms cubic-bezier(.3,.1,.25,1) both;
   }
   .codex-plus-pro-startup-inner-ring {
-    stroke:color-mix(in srgb,var(--codex-plus-startup-accent) 60%,var(--codex-plus-startup-foreground));stroke-width:.9;stroke-dasharray:1;opacity:.42;
+    stroke:var(--codex-plus-startup-orbit-blue);stroke-width:.8;stroke-dasharray:1;opacity:.24;
     transform:rotate(90deg);transform-box:fill-box;transform-origin:center;
     animation:codex-plus-startup-inner-orbit 1350ms 650ms cubic-bezier(.3,.1,.25,1) both;
   }
-  .codex-plus-pro-startup-waiting-orbit {
-    stroke:color-mix(in srgb,var(--codex-plus-startup-accent) 70%,var(--codex-plus-startup-foreground));stroke-width:1.8;stroke-dasharray:.18 .82;opacity:0;
-    transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;
+  .codex-plus-pro-startup-gradient-head { stop-color:var(--codex-plus-startup-orbit-ice) }
+  .codex-plus-pro-startup-gradient-cyan { stop-color:var(--codex-plus-startup-orbit-cyan) }
+  .codex-plus-pro-startup-gradient-blue { stop-color:var(--codex-plus-startup-orbit-blue) }
+  .codex-plus-pro-startup-orbit-reveal { opacity:1;animation:codex-plus-startup-detail 500ms 1500ms ease-out both }
+  .codex-plus-pro-startup-orbit-outer, .codex-plus-pro-startup-orbit-inner { transform-box:view-box;transform-origin:50% 50% }
+  .codex-plus-pro-startup-orbit-outer { transform:rotate(-90deg);animation:codex-plus-startup-scan-outer 4800ms linear infinite }
+  .codex-plus-pro-startup-orbit-inner { transform:rotate(90deg);animation:codex-plus-startup-scan-inner 3600ms linear infinite }
+  .codex-plus-pro-startup-sweep-outer {
+    stroke:url(#codex-plus-startup-outer-light);stroke-width:2.2;stroke-dasharray:.25 .07 .055 .625;
+    filter:drop-shadow(0 0 3px color-mix(in srgb,var(--codex-plus-startup-orbit-cyan) calc(var(--codex-plus-startup-orbit-glow) * 100%),transparent));
   }
+  .codex-plus-pro-startup-sweep-inner {
+    stroke:url(#codex-plus-startup-inner-light);stroke-width:1.7;stroke-dasharray:.2 .06 .045 .695;
+    filter:drop-shadow(0 0 2px color-mix(in srgb,var(--codex-plus-startup-orbit-blue) calc(var(--codex-plus-startup-orbit-glow) * 100%),transparent));
+  }
+  .codex-plus-pro-startup-orbit-head { fill:var(--codex-plus-startup-orbit-ice);filter:drop-shadow(0 0 3px var(--codex-plus-startup-orbit-cyan)) }
   .codex-plus-pro-startup-core-logo {
     position:absolute;inset:31%;background:var(--codex-pokedex-ball-logo,none) center/contain no-repeat;
     animation:codex-plus-startup-core 300ms 1300ms ease both;
@@ -133,7 +173,6 @@ const STARTUP_STYLE = `
   }
   .codex-plus-pro-startup-caption::before { content:'';display:inline-block;width:4px;height:4px;margin:0 10px 2px 0;border-radius:50%;background:var(--codex-plus-startup-signal);opacity:.65 }
   .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-caption::before { animation:codex-plus-startup-wait 1600ms ease-in-out infinite }
-  .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-waiting-orbit { opacity:.9;animation:codex-plus-startup-wait-orbit 4800ms linear infinite }
   .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-inner-ring { animation:codex-plus-startup-wait-ring 3200ms ease-in-out infinite }
   .codex-plus-pro-startup-splash[data-waiting=true] .codex-plus-pro-startup-wallpaper { animation:codex-plus-startup-wait-wallpaper 8000ms ease-in-out infinite }
   @keyframes codex-plus-startup-particle {
@@ -148,14 +187,14 @@ const STARTUP_STYLE = `
     8% { opacity:1 }
     53.333% { opacity:1;stroke-dashoffset:0;transform:rotate(-90deg) scale(1) }
     80% { opacity:1 }
-    100% { opacity:.68;stroke-dashoffset:0;transform:rotate(-90deg) scale(1) }
+    100% { opacity:.3;stroke-dashoffset:0;transform:rotate(-90deg) scale(1) }
   }
   @keyframes codex-plus-startup-inner-orbit {
     0% { opacity:0;stroke-dashoffset:-1;transform:rotate(165deg) scale(1.06) }
     10% { opacity:.7 }
     48.148% { opacity:.7;stroke-dashoffset:0;transform:rotate(90deg) scale(1) }
     77.778% { opacity:.7 }
-    100% { opacity:.42;stroke-dashoffset:0;transform:rotate(90deg) scale(1) }
+    100% { opacity:.24;stroke-dashoffset:0;transform:rotate(90deg) scale(1) }
   }
   @keyframes codex-plus-startup-detail { from { opacity:0 } to { opacity:1 } }
   @keyframes codex-plus-startup-core { from { opacity:0;transform:scale(.9) } to { opacity:1;transform:scale(1) } }
@@ -165,8 +204,9 @@ const STARTUP_STYLE = `
   @keyframes codex-plus-startup-wallpaper { from { opacity:0;transform:scale(1.045) } to { opacity:var(--codex-plus-startup-wallpaper-opacity);transform:scale(1) } }
   @keyframes codex-plus-startup-grid { from { opacity:.25 } to { opacity:.13 } }
   @keyframes codex-plus-startup-wait { 0%,100% { opacity:.35 } 50% { opacity:.85 } }
-  @keyframes codex-plus-startup-wait-orbit { from { transform:rotate(-90deg) } to { transform:rotate(270deg) } }
-  @keyframes codex-plus-startup-wait-ring { 0%,100% { opacity:.42 } 50% { opacity:.7 } }
+  @keyframes codex-plus-startup-scan-outer { from { transform:rotate(-90deg) } to { transform:rotate(270deg) } }
+  @keyframes codex-plus-startup-scan-inner { from { transform:rotate(90deg) } to { transform:rotate(-270deg) } }
+  @keyframes codex-plus-startup-wait-ring { 0%,100% { opacity:.24 } 50% { opacity:.38 } }
   @keyframes codex-plus-startup-wait-wallpaper { 0%,100% { transform:scale(1) } 50% { transform:scale(1.025) } }
   @media (max-width:640px) { .codex-plus-pro-startup-wallpaper { background-position:68% center } }
   @media (prefers-reduced-motion:reduce) {
