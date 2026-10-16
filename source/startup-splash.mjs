@@ -22,7 +22,6 @@ const STARTUP_MARKUP = `
       <svg class="codex-plus-pro-startup-geometry" viewBox="0 0 128 128" fill="none">
         <circle class="codex-plus-pro-startup-ring" cx="64" cy="64" r="54" pathLength="1"/>
         <circle class="codex-plus-pro-startup-inner-ring" cx="64" cy="64" r="43" pathLength="1"/>
-        <path class="codex-plus-pro-startup-ticks" d="M64 2v7M64 119v7M2 64h7M119 64h7M20 20l5 5M103 103l5 5M20 108l5-5M103 25l5-5"/>
       </svg>
       <span class="codex-plus-pro-startup-core-logo"></span>
     </div>
@@ -93,27 +92,26 @@ const STARTUP_STYLE = `
     content:'';position:absolute;inset:24%;border-radius:50%;
     background:radial-gradient(circle at 35% 30%,color-mix(in srgb,var(--codex-plus-startup-accent) 65%,#152126),var(--codex-plus-startup-deep));
     box-shadow:0 0 30px color-mix(in srgb,var(--codex-plus-startup-accent) 16%,transparent);
-    animation:codex-plus-startup-core 700ms 1300ms ease both;
+    animation:codex-plus-startup-core 300ms 1300ms ease both;
   }
   .codex-plus-pro-startup-mark::after {
     content:'';position:absolute;inset:5%;border:1px solid color-mix(in srgb,var(--codex-plus-startup-highlight) 60%,var(--codex-plus-startup-foreground));border-radius:50%;opacity:0;
-    animation:codex-plus-startup-pulse 700ms 1300ms cubic-bezier(.2,.65,.35,1) both;
+    animation:codex-plus-startup-pulse 400ms 1600ms cubic-bezier(.2,.65,.35,1) both;
   }
   .codex-plus-pro-startup-geometry { position:absolute;inset:0;width:100%;height:100%;stroke-width:1;stroke-linecap:round;stroke-linejoin:round }
   .codex-plus-pro-startup-ring {
-    stroke:color-mix(in srgb,var(--codex-plus-startup-highlight) 40%,var(--codex-plus-startup-foreground));stroke-dasharray:1;
-    transform:rotate(-90deg);transform-origin:64px 64px;
-    animation:codex-plus-startup-draw 800ms 500ms cubic-bezier(.3,.1,.25,1) both;
+    stroke:color-mix(in srgb,var(--codex-plus-startup-highlight) 40%,var(--codex-plus-startup-foreground));stroke-width:1.35;stroke-dasharray:1;opacity:.68;
+    transform:rotate(-90deg);transform-box:fill-box;transform-origin:center;
+    animation:codex-plus-startup-outer-orbit 1500ms 500ms cubic-bezier(.3,.1,.25,1) both;
   }
   .codex-plus-pro-startup-inner-ring {
-    stroke:color-mix(in srgb,var(--codex-plus-startup-accent) 60%,var(--codex-plus-startup-foreground));stroke-width:.65;stroke-dasharray:1;opacity:.65;
-    transform:rotate(90deg);transform-origin:64px 64px;
-    animation:codex-plus-startup-draw 650ms 650ms cubic-bezier(.3,.1,.25,1) both;
+    stroke:color-mix(in srgb,var(--codex-plus-startup-accent) 60%,var(--codex-plus-startup-foreground));stroke-width:.9;stroke-dasharray:1;opacity:.42;
+    transform:rotate(90deg);transform-box:fill-box;transform-origin:center;
+    animation:codex-plus-startup-inner-orbit 1350ms 650ms cubic-bezier(.3,.1,.25,1) both;
   }
-  .codex-plus-pro-startup-ticks { stroke:color-mix(in srgb,var(--codex-plus-startup-highlight) 40%,var(--codex-plus-startup-foreground));opacity:.65;animation:codex-plus-startup-detail 450ms 850ms ease both }
   .codex-plus-pro-startup-core-logo {
     position:absolute;inset:31%;background:var(--codex-pokedex-ball-logo,none) center/contain no-repeat;
-    animation:codex-plus-startup-core 700ms 1300ms ease both;
+    animation:codex-plus-startup-core 300ms 1300ms ease both;
   }
   .codex-plus-pro-startup-wordmark {
     position:absolute;left:calc(50% - 28px);top:50%;transform:translateY(-50%);
@@ -134,7 +132,21 @@ const STARTUP_STYLE = `
     78% { opacity:.18 }
     100% { opacity:0;transform:translate(0,-12px) scale(.4) }
   }
-  @keyframes codex-plus-startup-draw { from { opacity:0;stroke-dashoffset:1 } 8% { opacity:1 } to { opacity:1;stroke-dashoffset:0 } }
+  /* Both arcs close at 1.3s, then recede as the core activates through 2.0s. */
+  @keyframes codex-plus-startup-outer-orbit {
+    0% { opacity:0;stroke-dashoffset:1;transform:rotate(-165deg) scale(.94) }
+    8% { opacity:1 }
+    53.333% { opacity:1;stroke-dashoffset:0;transform:rotate(-90deg) scale(1) }
+    80% { opacity:1 }
+    100% { opacity:.68;stroke-dashoffset:0;transform:rotate(-90deg) scale(1) }
+  }
+  @keyframes codex-plus-startup-inner-orbit {
+    0% { opacity:0;stroke-dashoffset:-1;transform:rotate(165deg) scale(1.06) }
+    10% { opacity:.7 }
+    48.148% { opacity:.7;stroke-dashoffset:0;transform:rotate(90deg) scale(1) }
+    77.778% { opacity:.7 }
+    100% { opacity:.42;stroke-dashoffset:0;transform:rotate(90deg) scale(1) }
+  }
   @keyframes codex-plus-startup-detail { from { opacity:0 } to { opacity:1 } }
   @keyframes codex-plus-startup-core { from { opacity:0;transform:scale(.9) } to { opacity:1;transform:scale(1) } }
   @keyframes codex-plus-startup-pulse { 0% { opacity:0;transform:scale(.95) } 22% { opacity:.65 } 100% { opacity:0;transform:scale(1.65) } }

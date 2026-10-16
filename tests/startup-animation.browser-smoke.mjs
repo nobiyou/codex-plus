@@ -95,9 +95,17 @@ try {
       const el = name => document.querySelector('.codex-plus-pro-startup-' + name);
       const style = name => getComputedStyle(el(name));
       const rect = el('mark').getBoundingClientRect();
+      const orbit = name => {
+        const matrix = new DOMMatrixReadOnly(style(name).transform);
+        const bounds = el(name).getBoundingClientRect();
+        return { angle:Math.atan2(matrix.b,matrix.a)*180/Math.PI, scale:Math.hypot(matrix.a,matrix.b), centerX:bounds.x+bounds.width/2, centerY:bounds.y+bounds.height/2 };
+      };
       return {
         wallpaper: Number(style('wallpaper').opacity), wordmark: Number(style('wordmark').opacity),
         ring: Number(style('ring').opacity), dash: parseFloat(style('ring').strokeDashoffset),
+        innerRing: Number(style('inner-ring').opacity), innerDash: parseFloat(style('inner-ring').strokeDashoffset),
+        outerOrbit: orbit('ring'), innerOrbit: orbit('inner-ring'),
+        ticks: document.querySelectorAll('.codex-plus-pro-startup-ticks').length,
         core: Number(style('core-logo').opacity), pulse: Number(getComputedStyle(el('mark'), '::after').opacity),
         particles: Math.max(...[...el('particles').children].map(e => Number(getComputedStyle(e).opacity))),
         center: rect.x + rect.width / 2, width: innerWidth, transform: style('mark').transform,
@@ -128,6 +136,19 @@ try {
     };
   });
   await ready();
+  assert.equal((await seek(0)).ticks, 0, "the geometry must have no dial ticks");
+  const orbitStart = await seek(700), orbitEnd = await seek(1000);
+  assert.ok(orbitEnd.outerOrbit.angle > orbitStart.outerOrbit.angle + 5, "the outer arc makes a short clockwise turn while drawing");
+  assert.ok(orbitEnd.innerOrbit.angle < orbitStart.innerOrbit.angle - 5, "the inner arc turns in the opposite direction");
+  assert.ok(orbitStart.dash > 0 && orbitStart.innerDash < 0, "the arcs close in opposing directions");
+  for (const sample of [orbitStart, orbitEnd]) {
+    assert.ok(Math.abs(sample.outerOrbit.centerX - sample.innerOrbit.centerX) < .5 && Math.abs(sample.outerOrbit.centerY - sample.innerOrbit.centerY) < .5, "the moving rings remain concentric");
+  }
+  const formed = await seek(1300);
+  assert.ok(Math.abs(formed.dash) < .002 && Math.abs(formed.innerDash) < .002, "both arcs close before core activation");
+  const beforePulse = await seek(1580), activated = await seek(1690);
+  assert.ok(beforePulse.core > .9 && beforePulse.pulse === 0, "the logo becomes clear before its activation pulse");
+  assert.ok(activated.core === 1 && activated.pulse > .3, "the clear logo triggers a single visible pulse");
   const samples = [];
   for (const [i, ms] of [250, 900, 1650, 2300, 3000].entries()) {
     const sample = await seek(ms);
@@ -148,6 +169,7 @@ try {
   assert.equal(samples[4].wallpaper, .62, "the final composition must settle before the intro deadline");
   assert.equal(samples[4].pulse, 0);
   assert.equal(samples[4].particles, 0);
+  assert.ok(samples[4].ring <= .7 && samples[4].innerRing < samples[4].ring, "the rings recede behind the logo and wordmark at rest");
   assert.ok(samples[4].center < samples[1].center - 90, "the core makes room for the right-hand wordmark");
   assert.deepEqual(await seek(3200), await seek(8000), "a slow load must hold the final composition without looping");
 
