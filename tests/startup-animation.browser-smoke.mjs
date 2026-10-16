@@ -35,7 +35,7 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
   .scrub{display:flex;gap:16px;align-items:center;margin:20px 0}input[type=range]{flex:1;accent-color:#8cdeba}output{font:12px Consolas,monospace;white-space:nowrap;color:#a4bcb1}
   @media(max-width:640px){main{margin:16px auto;padding:0 12px}header{align-items:start;flex-direction:column}iframe{aspect-ratio:4/5}nav{grid-template-columns:repeat(2,1fr)}nav button:last-child{grid-column:1/-1}}
 </style>
-<main><header><div><h1>Codex Plus Pro</h1><p>完整动画 3.2 秒，快速就绪时加速播放；最终定格后柔和进入工作区。</p></div>
+<main><header><div><h1>Codex Plus Pro</h1><p>画面显示后完整播放 3.2 秒，最终定格后柔和进入工作区。</p></div>
 <div class="options"><label>主题 <select id="accent"><option value="aria">Aria 蓝</option><option value="forest">森林绿</option><option value="pokedex">图鉴红</option><option value="lagoon">湖泊青</option><option value="graphite">石墨灰</option></select></label>
 <label>外观 <select id="mode"><option value="dark">深色</option><option value="light">浅色</option></select></label></div></header>
 <iframe id="stage" title="启动动画预览"></iframe>
@@ -52,7 +52,8 @@ const preview = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta n
   function mount(){
     playing=false;cancelAnimationFrame(replayFrame);meter(0);
     const accent=document.getElementById('accent').value,mode=document.getElementById('mode').value,pack=packs[accent];
-    const init='const startedAt=performance.now(),root=document.documentElement;root.style.setProperty("--codex-pokedex-wallpaper",'+JSON.stringify('url("'+files[pack.wallpaper]+'")')+');root.style.setProperty("--codex-pokedex-ball-logo",'+JSON.stringify('url("'+files[pack.logo]+'")')+');'+
+    const init=(stage.dataset.startHidden?'Object.defineProperty(document,"hidden",{configurable:true,value:true});':'')+
+      'const startedAt=performance.now(),root=document.documentElement;root.style.setProperty("--codex-pokedex-wallpaper",'+JSON.stringify('url("'+files[pack.wallpaper]+'")')+');root.style.setProperty("--codex-pokedex-ball-logo",'+JSON.stringify('url("'+files[pack.logo]+'")')+');'+
       'new Function("location","localStorage",'+JSON.stringify(runtime)+')(new URL("app://-/index.html"),{getItem:key=>key==="codex-plus-pro-settings-v1"?'+JSON.stringify(JSON.stringify({theme:true,accent}))+':null});'+
       'window.__startupPreview={events:[],compositionAt:null,seek:ms=>document.getAnimations().forEach(a=>{a.pause();a.currentTime=ms}),complete:()=>{document.getElementById("root").innerHTML="<button>工作区已就绪</button>"},loading:()=>{document.getElementById("root").innerHTML="<div class=startup-loader><div class=startup-loader__logo>原始启动画面</div></div>"}};'+
       'const splash=document.querySelector("[data-codex-plus-startup-splash]"),state=window.__startupPreview;'+
@@ -87,7 +88,7 @@ try {
   const frame = () => page.frames().find(f => f.parentFrame() === page.mainFrame());
   const ready = async () => {
     await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor();
-    await frame().waitForFunction(() => window.__startupPreview && document.getAnimations().length > 0);
+    await frame().waitForFunction(() => window.__startupPreview && document.querySelector('[data-playback=running]') && document.getAnimations().length > 0);
   };
   const seek = async ms => {
     await page.locator("#timeline").evaluate((input, value) => { input.value = value; input.dispatchEvent(new Event("input")); }, ms);
@@ -217,11 +218,71 @@ try {
     assert.equal(leaving.wallpaper, "0.8");
     assert.equal(leaving.wordmark, "1");
     assert.equal(leaving.moving, false, "the five-stage composition must finish before fading");
-    assert.ok(leaving.at - state.compositionAt >= 360, "even the short path must hold its stable composition for 0.4s: " + JSON.stringify({ load, leaving, compositionAt: state.compositionAt }));
-    assert.deepEqual(leaving.rates, [load === "fast" ? 3 : 1], "early readiness accelerates only the fast intro");
+    assert.ok(leaving.at - state.compositionAt >= 360, "both readiness paths must hold their stable composition for 0.4s: " + JSON.stringify({ load, leaving, compositionAt: state.compositionAt }));
+    assert.ok(leaving.at >= 3200, "a fast workspace must still show all five stages");
+    assert.deepEqual(leaving.rates, [1], "readiness must not accelerate the animation");
     timings.push({ load, leaving: Math.round(leaving.at), hold: Math.round(leaving.at - state.compositionAt) });
   }
-  assert.ok(timings[0].leaving < timings[1].leaving, "a fast workspace shortens the user's actual wait");
+
+  // Simulate the Electron visibility signal while exercising real CSS motion.
+  // Headless Chromium keeps every tab visible, so hiding an iframe is not a
+  // Page Visibility transition and cannot represent a hidden native window.
+  await page.locator("#stage").evaluate(stage => { stage.dataset.startHidden = 'true'; });
+  await page.locator("#load").selectOption("manual");
+  await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:'attached' });
+  await frame().waitForFunction(() => window.__startupPreview, null, { polling:50 });
+  const waitingFrame = await frame().evaluate(() => {
+    const splash = document.querySelector('[data-codex-plus-startup-splash]');
+    return { playback:splash.getAttribute('data-playback'), opacity:getComputedStyle(splash.querySelector('.codex-plus-pro-startup-wordmark')).opacity };
+  });
+  await page.waitForTimeout(3500);
+  assert.equal(waitingFrame.playback, "paused");
+  assert.equal(waitingFrame.opacity, "0");
+  const unpresented = await frame().evaluate(() => ({
+    times:document.getAnimations().map(animation => animation.currentTime),
+    wordmark:getComputedStyle(document.querySelector('.codex-plus-pro-startup-wordmark')).opacity,
+    wallpaper:getComputedStyle(document.querySelector('.codex-plus-pro-startup-wallpaper')).opacity,
+  }));
+  assert.ok(unpresented.times.every(time => time === 0), "waiting for presentation must not consume animation time");
+  assert.equal(unpresented.wordmark, "0");
+  assert.equal(unpresented.wallpaper, "0");
+  await frame().evaluate(() => window.__startupPreview.complete());
+  await frame().evaluate(() => {
+    // Observe live rendering inside rAF, rather than sampling 900ms after a
+    // remote command whose delivery can be delayed by desktop machine load.
+    window.__startupPreview.formation = new Promise(resolve => {
+      const sample = () => {
+        const ring = document.querySelector('.codex-plus-pro-startup-ring');
+        const orbit = ring.getAnimations()[0];
+        if (!orbit || orbit.currentTime < 850) { requestAnimationFrame(sample); return; }
+        const forming = { dash:parseFloat(getComputedStyle(ring).strokeDashoffset), wordmark:getComputedStyle(document.querySelector('.codex-plus-pro-startup-wordmark')).opacity };
+        Object.defineProperty(document, 'hidden', { configurable:true, value:true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve({ forming, pausedTimes:document.getAnimations().map(animation => animation.currentTime) })));
+      };
+      requestAnimationFrame(sample);
+    });
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.locator("#stage").evaluate(stage => { delete stage.dataset.startHidden; });
+  const { forming, pausedTimes } = await frame().evaluate(() => window.__startupPreview.formation);
+  assert.ok(forming.dash > 0 && forming.dash < 1, "the first visible sequence must include ring formation: " + JSON.stringify(forming));
+  assert.equal(forming.wordmark, "0", "delayed presentation must not open on the final composition");
+  if (artifactDir) await page.locator("#stage").screenshot({ path:path.join(artifactDir, 'startup-visible-playback.png') });
+  await page.waitForTimeout(1100);
+  assert.deepEqual(await frame().evaluate(() => document.getAnimations().map(animation => animation.currentTime)), pausedTimes, "hidden playback must freeze every animation including pseudo-elements");
+  assert.equal(await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").count(), 1);
+  await frame().evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:'detached' });
+  const resumed = await frame().evaluate(() => window.__startupPreview);
+  const resumedLeaving = resumed.events.find(event => event.phase === 'leaving');
+  // The preview event clock begins before its initial 3.5s without presentation.
+  assert.ok(resumedLeaving.at - resumed.compositionAt >= 360, "resumed playback retains the real final hold");
+  assert.ok(resumedLeaving.at >= 3500 + 3200 + 1100, "neither pre-presentation nor hidden time may shorten the visible sequence");
 
   await page.locator("#load").selectOption("manual");
   await ready();
@@ -254,7 +315,7 @@ try {
   await page.frameLocator("#stage").locator("[data-codex-plus-startup-splash]").waitFor({ state:"detached" });
   assert.equal(await frame().evaluate(() => document.documentElement.getAttribute('data-codex-plus-startup-state')), "ready");
   assert.deepEqual(errors, []);
-  console.log("Startup visual checks passed: five keyframes, light/dark color and contrast checks for five themes, shared motion, real fast/normal timing, final hold, slow feedback, fade recovery and reduced motion.");
+  console.log("Startup visual checks passed: five keyframes, five light/dark themes, full fast/normal playback, delayed presentation, hidden/resumed motion, final hold, slow feedback, fade recovery and reduced motion.");
   console.log(JSON.stringify(timings));
 } finally {
   await browser.close();

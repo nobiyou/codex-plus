@@ -1,8 +1,6 @@
 // HTML and React both own loading phases. Keep the cover outside their root.
 const STARTUP_HOLD_MS = 400;
 const STARTUP_EXIT_MS = 180;
-const STARTUP_QUICK_WINDOW_MS = 500;
-const STARTUP_QUICK_RATE = 3;
 const STARTUP_WAIT_MS = 6000;
 const STARTUP_MARKUP = `
   <div class="codex-plus-pro-startup-wallpaper" aria-hidden="true"></div>
@@ -56,6 +54,9 @@ const STARTUP_STYLE = `
     color-scheme:dark;
   }
   .codex-plus-pro-startup-splash[data-phase=leaving] { opacity:0;transition:opacity ${STARTUP_EXIT_MS}ms ease-out }
+  .codex-plus-pro-startup-splash[data-playback=paused] *,
+  .codex-plus-pro-startup-splash[data-playback=paused] *::before,
+  .codex-plus-pro-startup-splash[data-playback=paused] *::after { animation-play-state:paused!important }
   .codex-plus-pro-startup-splash::before {
     content:'';position:absolute;inset:0;z-index:0;
     background:radial-gradient(ellipse at 50% 48%,color-mix(in srgb,var(--codex-plus-startup-accent) 12%,transparent),transparent 55%);
@@ -190,11 +191,13 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
     let style = null;
     let finished = false;
     let readyFrame = null;
+    let playbackFrame = null;
     let introTimer = null;
     let exitTimer = null;
     let waitTimer = null;
-    let startedAt = 0;
-    let quickIntro = false;
+    let motionEnded = false;
+    let holdRemaining = ${STARTUP_HOLD_MS};
+    let holdStartedAt = 0;
     const motionPreference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
     let introComplete = Boolean(motionPreference?.matches);
     // CSS-module prefixes survive hashed builds; these are the official React
@@ -216,6 +219,8 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       observer.disconnect();
       if (readyFrame !== null) window.cancelAnimationFrame(readyFrame);
       readyFrame = null;
+      if (playbackFrame !== null) window.cancelAnimationFrame(playbackFrame);
+      playbackFrame = null;
       if (introTimer !== null) window.clearTimeout(introTimer);
       introTimer = null;
       if (exitTimer !== null) window.clearTimeout(exitTimer);
@@ -225,6 +230,7 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       motionPreference?.removeEventListener?.("change", reduceMotion);
       window.removeEventListener("pagehide", cleanup);
       document.removeEventListener("DOMContentLoaded", sync);
+      document.removeEventListener("visibilitychange", sync);
       splash?.removeEventListener("animationend", introMotionEnded);
       splash?.remove();
       style?.remove();
@@ -254,11 +260,55 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       introComplete = true;
       sync();
     };
+    const holdFinalFrame = () => {
+      if (!motionEnded || introComplete || introTimer !== null || document.hidden) return;
+      holdStartedAt = performance.now();
+      introTimer = window.setTimeout(finishIntro, holdRemaining);
+    };
     const introMotionEnded = (event) => {
-      if (event.animationName !== "codex-plus-startup-wallpaper" || finished || introComplete || introTimer !== null) return;
+      if (event.animationName !== "codex-plus-startup-wallpaper" || finished || introComplete || motionEnded) return;
       // Start the hold from the actual final paint, including any asset/style
       // delays. A wall-clock deadline alone can consume the entire hold.
-      introTimer = window.setTimeout(finishIntro, ${STARTUP_HOLD_MS});
+      motionEnded = true;
+      holdFinalFrame();
+    };
+    const syncPlayback = () => {
+      if (document.hidden) {
+        if (playbackFrame !== null) window.cancelAnimationFrame(playbackFrame);
+        playbackFrame = null;
+        splash.setAttribute("data-playback", "paused");
+        if (introTimer !== null) {
+          holdRemaining = Math.max(0, holdRemaining - (performance.now() - holdStartedAt));
+          window.clearTimeout(introTimer);
+          introTimer = null;
+        }
+        return false;
+      }
+      if (motionPreference?.matches) {
+        if (playbackFrame !== null) window.cancelAnimationFrame(playbackFrame);
+        playbackFrame = null;
+        splash.setAttribute("data-playback", "running");
+        return true;
+      }
+      if (splash.getAttribute("data-playback") === "running") return true;
+      // Mount the paused first frame, then begin after a visible paint. Renderer
+      // initialization must not spend the user's animation time off screen.
+      if (playbackFrame === null) playbackFrame = window.requestAnimationFrame(() => {
+        playbackFrame = window.requestAnimationFrame(() => {
+          playbackFrame = null;
+          if (finished || document.hidden) return;
+          splash.setAttribute("data-playback", "running");
+          holdFinalFrame();
+          if (!introComplete && waitTimer === null) {
+            waitTimer = window.setTimeout(() => {
+              waitTimer = null;
+              splash.setAttribute("data-waiting", "true");
+            }, ${STARTUP_WAIT_MS});
+          }
+          sync();
+        });
+      });
+      return false;
     };
     const reveal = () => {
       if (motionPreference?.matches) { cleanup(); return; }
@@ -308,19 +358,14 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
         splash.setAttribute("role", "status");
         splash.setAttribute("aria-live", "polite");
         splash.setAttribute("aria-label", "正在加载 Codex Plus Pro");
+        splash.setAttribute("data-playback", "paused");
         splash.innerHTML = ${JSON.stringify(STARTUP_MARKUP)};
         splash.addEventListener("animationend", introMotionEnded);
         (document.body || root).appendChild(splash);
         root.setAttribute("data-codex-plus-startup-state", "loading");
-        startedAt = performance.now();
-        if (!introComplete) {
-          waitTimer = window.setTimeout(() => {
-            waitTimer = null;
-            splash.setAttribute("data-waiting", "true");
-          }, ${STARTUP_WAIT_MS});
-        }
       }
       if (document.body && splash.parentNode !== document.body) document.body.appendChild(splash);
+      if (!syncPlayback()) { cancelReveal(); return; }
       if (!contentReady()) { cancelReveal(); return; }
       if (exitTimer !== null) return;
       // Check across a painted frame so a transient empty/loading handoff cannot
@@ -328,17 +373,8 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
       if (readyFrame === null) readyFrame = window.requestAnimationFrame(() => {
         readyFrame = window.requestAnimationFrame(() => {
           readyFrame = null;
-          if (!contentReady()) { cancelReveal(); return; }
-          if (!introComplete) {
-            const elapsed = performance.now() - startedAt;
-            // Early painted content is a fast load, not evidence of a warm
-            // process. Accelerate from the current frame without skipping it.
-            if (!quickIntro && elapsed <= ${STARTUP_QUICK_WINDOW_MS}) {
-              quickIntro = true;
-              for (const animation of splash.getAnimations({ subtree: true })) animation.updatePlaybackRate(${STARTUP_QUICK_RATE});
-            }
-            return;
-          }
+          if (document.hidden || !contentReady()) { cancelReveal(); return; }
+          if (!introComplete) return;
           reveal();
         });
       });
@@ -348,6 +384,7 @@ export function buildStartupSource({ css, assetSource, accentOptions }) {
     observer.observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-theme", "class", "hidden", "aria-hidden"] });
     window.addEventListener("pagehide", cleanup, { once: true });
     document.addEventListener("DOMContentLoaded", sync, { once: true });
+    document.addEventListener("visibilitychange", sync);
     sync();
   })()`;
 }
