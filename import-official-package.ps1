@@ -157,8 +157,11 @@ if (-not $entrypoint) {
 if (Test-Path -LiteralPath $finalDir) { Remove-DirectoryTree -Path $finalDir }
 [System.IO.Directory]::Move($partialDir, $finalDir)
 
-$finalEntrypoint = Get-CodexPlusEntrypoint -Directory $finalDir
 $cleanupResults = @(Remove-CodexPlusOldManagedVersions -Root $Root -Keep $KeepVersions)
+$finalEntrypoint = Get-CodexPlusEntrypoint -Directory $finalDir
+if (-not $finalEntrypoint) {
+  throw "Imported entrypoint is missing after cleanup: $finalDir. Import was not successful."
+}
 $removedVersions = @($cleanupResults | Where-Object { $_.State -eq "Removed" } | Select-Object Version, Path, DownloadCleanup)
 $deferredCleanup = @($cleanupResults | Where-Object { $_.State -in @("Deferred", "Protected") } | Select-Object State, Version, Path, Error)
 [pscustomobject]@{

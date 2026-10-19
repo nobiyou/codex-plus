@@ -305,7 +305,14 @@ function Remove-CodexPlusOldManagedVersions {
   if (-not (Test-Path -LiteralPath $versionsRoot -PathType Container)) { return @() }
 
   $versions = @(Get-CodexPlusManagedVersions -Root $Root)
-  $ordered = @($versions | Sort-Object -Property @{ Expression = { ConvertTo-CodexPlusVersionParts -Version $_.Version }; Descending = $true })
+  # Sort-Object compares array-valued keys as text (928 before 1013).
+  # Use the same numeric comparison as the launcher's latest-version resolver.
+  $ordered = [System.Collections.Generic.List[object]]::new()
+  $ordered.AddRange([object[]]$versions)
+  $ordered.Sort([System.Comparison[object]]{
+    param($left, $right)
+    return (Compare-CodexPlusVersion -Left $right.Version -Right $left.Version)
+  })
   $keepSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
   foreach ($item in @($ordered | Select-Object -First $Keep)) {
     [void]$keepSet.Add($item.Version)
