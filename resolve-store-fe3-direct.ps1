@@ -13,6 +13,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+# The Node host reads redirected output as UTF-8, including localized errors.
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Console]::OutputEncoding
 
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $TemplateRoot = Join-Path $ScriptRoot "store-templates"
@@ -33,12 +37,45 @@ function Get-TemplateText {
 function Invoke-Fe3Soap {
   param(
     [Parameter(Mandatory = $true)][string]$Uri,
-    [Parameter(Mandatory = $true)][string]$Body
+    [Parameter(Mandatory = $true)][string]$Body,
+    [Parameter(Mandatory = $true)][string]$Operation
   )
-  return Invoke-WebRequest -Uri $Uri -Method Post -UseBasicParsing -TimeoutSec 30 -Headers @{
-    "Content-Type" = "application/soap+xml; charset=utf-8"
-    "User-Agent" = $UserAgent
-  } -Body $Body
+  # These SOAP operations only read metadata. Retry transient transport errors
+  # without restarting a download or repeating an import.
+  $maxAttempts = 3
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    Write-UpgradeProgress -Phase "resolving" -Current 0 -Total 0 -Status "Resolving official download address" -Step $Operation -Attempt $attempt -MaxAttempts $maxAttempts
+    try {
+      return Invoke-WebRequest -Uri $Uri -Method Post -UseBasicParsing -TimeoutSec 30 -Headers @{
+        "Content-Type" = "application/soap+xml; charset=utf-8"
+        "User-Agent" = $UserAgent
+      } -Body $Body
+    } catch {
+      $failure = $_.Exception
+      while ($failure.InnerException -and $failure -isnot [System.Net.WebException]) { $failure = $failure.InnerException }
+      $retryable = $false
+      if ($failure -is [System.Net.WebException]) {
+        $retryable = $failure.Status -in @(
+          [System.Net.WebExceptionStatus]::ConnectionClosed,
+          [System.Net.WebExceptionStatus]::KeepAliveFailure,
+          [System.Net.WebExceptionStatus]::ReceiveFailure,
+          [System.Net.WebExceptionStatus]::SendFailure,
+          [System.Net.WebExceptionStatus]::Timeout,
+          [System.Net.WebExceptionStatus]::ConnectFailure,
+          [System.Net.WebExceptionStatus]::NameResolutionFailure,
+          [System.Net.WebExceptionStatus]::ProxyNameResolutionFailure
+        )
+        if ($failure.Response -is [System.Net.HttpWebResponse]) {
+          $retryable = [int]$failure.Response.StatusCode -in @(408, 429, 500, 502, 503, 504)
+          $failure.Response.Close()
+        }
+      }
+      if (-not $retryable -or $attempt -eq $maxAttempts) {
+        throw "Official download service $Operation failed after $attempt attempt(s): $($failure.Message)"
+      }
+      Start-Sleep -Milliseconds (500 * $attempt)
+    }
+  }
 }
 
 function ConvertFrom-HtmlEncodedXml {
@@ -168,7 +205,10 @@ function Write-UpgradeProgress {
     [Parameter(Mandatory = $true)][string]$Phase,
     [Parameter(Mandatory = $true)][int64]$Current,
     [Parameter(Mandatory = $true)][int64]$Total,
-    [Parameter(Mandatory = $true)][string]$Status
+    [Parameter(Mandatory = $true)][string]$Status,
+    [string]$Step = "",
+    [int]$Attempt = 0,
+    [int]$MaxAttempts = 0
   )
   $percent = $null
   if ($Total -gt 0) {
@@ -188,6 +228,9 @@ function Write-UpgradeProgress {
     percent = $percent
     status = $Status
     detail = $detail
+    step = $Step
+    attempt = $Attempt
+    maxAttempts = $MaxAttempts
   }
   [Console]::Error.WriteLine(($payload | ConvertTo-Json -Compress -Depth 3))
 }
@@ -289,19 +332,19 @@ $getCookieTemplate = Get-TemplateText -Name "GetCookie.xml"
 $syncTemplate = Get-TemplateText -Name "WUIDRequest.xml"
 $fileUrlTemplate = Get-TemplateText -Name "FE3FileUrl.xml"
 
-$cookieResponse = Invoke-Fe3Soap -Uri $Fe3Url -Body $getCookieTemplate
+$cookieResponse = Invoke-Fe3Soap -Uri $Fe3Url -Body $getCookieTemplate -Operation "GetCookie"
 $encryptedData = Get-ElementText -Xml $cookieResponse.Content -LocalName "EncryptedData"
 if ([string]::IsNullOrWhiteSpace($encryptedData)) { throw "FE3 GetCookie response did not contain EncryptedData." }
 
 # The StoreLib-derived template has a token placeholder. For this product the FE3
 # SyncUpdates and secured FileUrl calls accept an empty ticket body on this host.
 $syncBody = $syncTemplate.Replace("{0}", $encryptedData).Replace("{1}", $categoryId).Replace("{2}", "")
-$syncResponse = Invoke-Fe3Soap -Uri $Fe3Url -Body $syncBody
+$syncResponse = Invoke-Fe3Soap -Uri $Fe3Url -Body $syncBody -Operation "SyncUpdates"
 $candidates = Get-PackageCandidates -SyncXml $syncResponse.Content
 $best = Select-BestCandidate -Candidates $candidates -Architecture $Architecture
 
 $fileUrlBody = $fileUrlTemplate.Replace("{0}", $best.UpdateId).Replace("{1}", $best.RevisionId).Replace("{2}", "")
-$fileUrlResponse = Invoke-Fe3Soap -Uri $Fe3SecuredUrl -Body $fileUrlBody
+$fileUrlResponse = Invoke-Fe3Soap -Uri $Fe3SecuredUrl -Body $fileUrlBody -Operation "GetExtendedUpdateInfo2"
 $urls = Get-FileUrls -Xml $fileUrlResponse.Content
 $downloadUrl = Select-MsixUrl -Urls $urls
 

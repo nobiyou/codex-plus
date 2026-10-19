@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,10 +24,11 @@ async function hostResult(result) {
     postOfficialUpgradeResult: async () => {}, localizeOfficialProgress: value => value,
     spawn() {
       const child = new EventEmitter();
-      child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
       queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.from(result.stdout));
-        child.stderr.emit("data", Buffer.from(result.stderr));
+        child.stdout.end(Buffer.from(result.stdout));
+        for (const chunk of result.stderrChunks || [Buffer.from(result.stderr)]) child.stderr.write(chunk);
+        child.stderr.end();
         child.emit("close", result.code);
       });
       return child;
@@ -93,6 +95,13 @@ ${body}
 }
 
 const windows = { skip: process.platform !== "win32" };
+
+test("official update errors preserve Chinese across split UTF-8 stream chunks", async () => {
+  const message = "官方下载服务连接已中断，请稍后重试。";
+  const payload = await hostResult({ code: 1, stdout: "", stderr: "", stderrChunks: [...Buffer.from(message)].map(byte => Buffer.from([byte])) });
+  assert.equal(payload.state, "failed");
+  assert.equal(payload.detail, message);
+});
 
 test("retention uses numeric version order across September and October builds", windows, async () => {
   const result = await powershell(`

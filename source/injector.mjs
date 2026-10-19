@@ -534,6 +534,8 @@ function runOfficialImportUpgradeOnce(send) {
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     let stdout = "";
     let stderr = "";
     let stdoutLineBuffer = "";
@@ -631,9 +633,9 @@ function localizeOfficialProgress(payload) {
   const current = Number(payload?.current || 0);
   const total = Number(payload?.total || 0);
   const percent = Number(payload?.percent);
-  const status = phase === "downloading"
-    ? (total > 0 ? "正在下载官方新版" : "正在连接官方 CDN")
-    : "正在导入官方新版";
+  const status = phase === "resolving" ? "正在获取官方下载地址"
+    : phase === "downloading" ? (total > 0 ? "正在下载官方新版" : "正在连接官方 CDN")
+      : "正在导入官方新版";
   const formatBytes = (value) => {
     if (value < 1024) return `${Math.round(value)} B`;
     if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
@@ -641,7 +643,10 @@ function localizeOfficialProgress(payload) {
     return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
   let detail = status;
-  if (total > 0 && phase === "downloading") {
+  if (phase === "resolving") {
+    detail = { GetCookie: "连接官方下载服务", SyncUpdates: "查询官方安装包", GetExtendedUpdateInfo2: "获取官方下载地址" }[payload.step] || status;
+    if (Number(payload.attempt) > 1) detail += `，正在重试（${payload.attempt}/${payload.maxAttempts}）`;
+  } else if (total > 0 && phase === "downloading") {
     detail += `：${formatBytes(current)} / ${formatBytes(total)}`;
     if (Number.isFinite(percent)) detail += ` (${percent.toFixed(1)}%)`;
   } else if (total > 0) {
