@@ -8018,29 +8018,76 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
   fill: currentColor !important;
 }
 
-/* MCP approval cards expose server/tool arguments instead of a command
-   preview. Keep those rows aligned with the native approval hierarchy. */
+/* MCP approvals have a full-width alert followed by argument rows. Anchor
+   the table layout to those rows, never to the alert/body's two children. */
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form) {
-  padding-inline: 16px !important;
-  color: var(--color-token-text-primary, var(--color-token-foreground, #30231e)) !important;
+  > div:has(> [role="alert"]) {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 14px !important;
+  padding: 16px !important;
 }
 
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> div > :first-child + :last-child)
-  > div,
+  [role="alert"] {
+  display: block !important;
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> :first-child + :last-child):not(
-    :has(> div > :first-child + :last-child)
-  ) {
+  [role="alert"] [class*="text-default"] {
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  overflow-wrap: anywhere !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > div:has(> [role="alert"]) > div:not([role="alert"]) {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  min-width: 0 !important;
+  padding: 2px 12px !important;
+  border: 1px solid color-mix(
+    in srgb,
+    var(--codex-plus-accent, #3b82c4) 13%,
+    var(--color-token-border-light, transparent)
+  ) !important;
+  border-radius: 10px !important;
+  background: var(--codex-plus-approval-code-surface) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  dl > div:has(> dt + dd),
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > div:has(> [role="alert"]) > div:not([role="alert"])
+  > div:has(> :first-child + :last-child) {
   display: grid !important;
-  grid-template-columns: minmax(72px, 96px) minmax(0, 1fr) !important;
-  align-items: center !important;
-  column-gap: 16px !important;
-  min-height: 32px !important;
+  grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) !important;
+  align-items: start !important;
+  gap: 16px !important;
+  min-width: 0 !important;
+  padding-block: 8px !important;
+  line-height: 1.5 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > div:has(> [role="alert"]) > div:not([role="alert"]) > :is(dl, div) {
+  margin: 0 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > div:has(> [role="alert"]) > div:not([role="alert"]) > :is(dl, div):not(:last-child) {
   border-bottom: 1px solid color-mix(
     in srgb,
     var(--codex-plus-accent, #3b82c4) 9%,
@@ -8050,44 +8097,67 @@ body > .codex-plus-pro-settings-button[data-fallback-entry="true"][aria-expanded
 
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> div > :first-child + :last-child)
-  > div:last-child,
+  dt,
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> :first-child + :last-child):not(
-    :has(> div > :first-child + :last-child)
-  )
-  :last-of-type {
-  border-bottom: 0 !important;
-}
-
-:root[data-codex-pokedex-theme="on"]
-  [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> div > :first-child + :last-child)
-  > div > :first-child,
-:root[data-codex-pokedex-theme="on"]
-  [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> :first-child + :last-child):not(
-    :has(> div > :first-child + :last-child)
-  )
-  > :first-child {
+  > div:has(> [role="alert"]) > div:not([role="alert"])
+  > div:has(> :first-child + :last-child) > :first-child {
+  min-width: 0 !important;
+  overflow-wrap: anywhere !important;
   color: var(--color-token-text-secondary, var(--color-token-foreground, #30231e)) !important;
   font-size: 12px !important;
+  line-height: 21px !important;
 }
 
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> div > :first-child + :last-child)
-  > div > :last-child,
+  dd,
 :root[data-codex-pokedex-theme="on"]
   [data-codex-approval-surface][data-codex-approval-mcp="on"]
-  > div:not([role="alert"]):not(form):has(> :first-child + :last-child):not(
-    :has(> div > :first-child + :last-child)
-  )
-  > :last-child {
+  > div:has(> [role="alert"]) > div:not([role="alert"])
+  > div:has(> :first-child + :last-child) > :last-child {
   min-width: 0 !important;
   overflow-wrap: anywhere !important;
   color: var(--color-token-text-primary, var(--color-token-foreground, #30231e)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"] > form {
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+  padding-inline: 16px !important;
+}
+
+/* The native allow action can be a split button. Theme both halves while
+   leaving its scope menu, event handlers, and focus order with Codex. */
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > form > div:last-child > div:last-child > button {
+  color: var(--codex-plus-action-fg, var(--color-token-button-foreground, #ffffff)) !important;
+  -webkit-text-fill-color: var(--codex-plus-action-fg, var(--color-token-button-foreground, #ffffff)) !important;
+  border-color: var(--codex-plus-action-bg, var(--codex-plus-accent, #3b82c4)) !important;
+  background: var(--codex-plus-action-bg, var(--codex-plus-accent, #3b82c4)) !important;
+  background-image: none !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > form > div:last-child > div:last-child > button:is(:hover, :focus-visible) {
+  background: var(--codex-plus-action-bg-hover, var(--codex-plus-accent, #3b82c4)) !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > form > div:last-child > div:last-child > button:first-child:not(:last-child) {
+  border-start-end-radius: 0 !important;
+  border-end-end-radius: 0 !important;
+}
+
+:root[data-codex-pokedex-theme="on"]
+  [data-codex-approval-surface][data-codex-approval-mcp="on"]
+  > form > div:last-child > div:last-child > button:last-child:not(:first-child) {
+  border-start-start-radius: 0 !important;
+  border-end-start-radius: 0 !important;
 }
 
 /* The command preview keeps the native scroll behavior but gains a quiet

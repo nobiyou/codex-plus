@@ -637,8 +637,9 @@ test("MCP approval cards style parameter rows without changing decision semantic
 
   assert.match(injector, /data-codex-approval-mcp/);
   assert.match(approvalBlock, /\[data-codex-approval-mcp="on"\]/);
-  assert.match(approvalBlock, /:has\(> div > :first-child \+ :last-child\)/);
-  assert.match(approvalBlock, /grid-template-columns:\s*minmax\(72px, 96px\)/);
+  assert.match(approvalBlock, /dl > div:has\(> dt \+ dd\)/);
+  assert.doesNotMatch(approvalBlock, /:has\(> div > :first-child \+ :last-child\)/);
+  assert.match(approvalBlock, /grid-template-columns:\s*minmax\(96px, 120px\) minmax\(0, 1fr\)/);
   assert.match(approvalBlock, /border-bottom:\s*1px solid/);
   assert.match(approvalBlock, /data-codex-approval-mcp="on"[\s\S]*--codex-plus-action-bg/);
 });
