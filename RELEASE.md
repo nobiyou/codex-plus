@@ -1,5 +1,27 @@
 # Codex Plus Pro Windows — Release Notes
 
+## 1.8.10 (2026-10-23, adaptive startup, official updates, and MCP approvals)
+
+### Improved
+
+- Added a five-stage startup sequence with theme wallpaper, concentric rings, and accent-aware effects for light and dark appearances. Recorded launch times adjust entrance pacing; ring and wallpaper motion continues while the workspace loads.
+- Startup playback accounts for actual visible time, pauses while hidden, and keeps the loading cover until workspace, login, or error controls are ready. Reduced-motion settings remain supported.
+- MCP approval cards now place the service and explanation above aligned argument rows. Long paths wrap, the decision footer stays aligned, and the allow action and scope menu follow the active theme.
+
+### Fixed
+
+- Native dialogs, external pages, and unrelated webviews are excluded from theme injection.
+- Settings header, version row, and panel cache use the loaded release version, even when launcher metadata is older.
+- Managed official versions use numeric version ordering so an October update is retained ahead of September versions. Import verifies the retained entrypoint before reporting success.
+- Official FE3 metadata lookups retry transient transport failures up to three times. Windows PowerShell output preserves UTF-8 diagnostics, and download-resolution progress is localized.
+
+### Verification
+
+- 155 Node regression tests and both Windows PowerShell launcher tests passed. All 12 launcher scripts/modules parsed successfully; injector, renderer, and pet-controller syntax checks passed.
+- Browser checks passed for MCP approval layouts and action contrast, extension discovery/update/rollback, and startup pacing, continuous loading, light/dark palettes, theme accents, hidden-window pauses, and reduced motion.
+- Packaging and archive contents are checked against the release snapshot; unrelated working-tree changes are excluded.
+- Restarting the active signed-in Codex profile, completing a real pending MCP approval, and importing a complete official package have not been rechecked for this release.
+
 ## 1.8.9 (2026-10-14, GitHub MCP / Skills updates)
 
 ### New

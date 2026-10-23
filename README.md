@@ -1,9 +1,11 @@
-# Codex Plus Pro for Windows (Scope B2) 1.8.9
+# Codex Plus Pro for Windows (Scope B2) 1.8.10
 
 Theme-oriented Windows launcher for official Microsoft Store ChatGPT / Codex (`OpenAI.Codex`) with Codex Plus Pro UI enhancements and local official MSIX version management.
 
-**Status: Scope B2 1.8.9** — theme + accent + wallpaper/logo + light/dark + themed startup animation + native model picker styling + official pet show/hide control + compatibility checklist + GitHub MCP/Skill update checks and optional automatic updates + official MSIX local-version upgrade.
+**Status: Scope B2 1.8.10** — theme + accent + wallpaper/logo + light/dark + themed startup animation + native model picker styling + official pet show/hide control + compatibility checklist + GitHub MCP/Skill update checks and optional automatic updates + official MSIX local-version upgrade.
 Picture-in-picture has been removed.
+
+Version 1.8.10 adds startup pacing based on recorded launch times, continuous theme-colored ring animation while the workspace loads, and a clearer MCP approval layout. It also fixes version display consistency, official-update retention across month boundaries, and interrupted download lookups. See [release notes](RELEASE.md) for details and verification limits.
 
 ## Requirements
 

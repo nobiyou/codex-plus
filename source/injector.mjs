@@ -4893,7 +4893,7 @@ function buildMainControllerSource() {
     const petShowGuards = new Map();
     const controller = {
       active: true,
-      version: "1.8.9",
+      version: "1.8.10",
       petWindowVisibility,
       petHiddenByUs,
       petShowGuards,
